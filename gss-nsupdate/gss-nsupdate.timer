@@ -1,0 +1,13 @@
+[Unit]
+Description=Publish Kerberos-authenticated DNS records after boot and daily
+
+[Timer]
+OnBootSec=2min
+OnCalendar=daily
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=30s
+Unit=gss-nsupdate.service
+
+[Install]
+WantedBy=timers.target

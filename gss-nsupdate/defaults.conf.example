@@ -1,0 +1,34 @@
+# Copy to /etc/gss-nsupdate/defaults.conf.
+# These settings apply to every record config; any record may override them.
+
+TTL=3600
+LOG_FILE=/var/log/gss-nsupdate.log
+RETRY_DELAY=0.3
+
+# Leave NIC empty to use the interface selected by ROUTE_TARGET.
+NIC=""
+ROUTE_TARGET=1.1.1.1
+ADDRESS_MODE=primary
+
+# Used by secondary mode to select one non-primary address (zero-based).
+ADDRESS_INDEX=0
+# Used by explicit mode.
+ADDRESSES=()
+
+KEYTAB_FILE=/etc/krb5.keytab
+# Empty values are derived from the machine FQDN.
+KEYTAB_PRINCIPAL=""
+KERBEROS_REALM=""
+# Empty creates and cleans up an isolated temporary cache.
+CREDENTIAL_CACHE=""
+# Bash array of additional kinit arguments, for example: (-V)
+KINIT_EXTRA_ARGS=()
+
+# Empty discovers servers using _ldap._tcp.<kerberos-realm>.
+DNS_SERVERS=()
+DNS_SRV_NAME=""
+# Bash array of additional nsupdate arguments.
+NSUPDATE_EXTRA_ARGS=()
+
+UPDATE_A=true
+UPDATE_PTR=true

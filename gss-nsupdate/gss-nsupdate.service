@@ -1,0 +1,16 @@
+[Unit]
+Description=Publish Kerberos-authenticated DNS records
+Documentation=file:/usr/local/share/doc/gss-nsupdate/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gss-nsupdate
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full

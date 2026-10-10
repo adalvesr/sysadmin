@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+#
+# Publish IPv4 A and PTR records using Kerberos/GSS-TSIG.
+# Shared defaults are read from /etc/gss-nsupdate/defaults.conf and every other
+# /etc/gss-nsupdate/*.conf file describes one record to update.
+
+set -uo pipefail
+
+CONFIG_DIR="${GSS_NSUPDATE_CONFIG_DIR:-/etc/gss-nsupdate}"
+
+set_builtin_defaults() {
+    ENABLED=true
+    RECORD_FQDN=""
+    ADDRESS_MODE=primary
+    ADDRESSES=()
+    ADDRESS_INDEX=0
+    NIC=""
+    ROUTE_TARGET=1.1.1.1
+
+    TTL=3600
+    UPDATE_A=true
+    UPDATE_PTR=true
+
+    KEYTAB_FILE=/etc/krb5.keytab
+    KEYTAB_PRINCIPAL=""
+    KERBEROS_REALM=""
+    CREDENTIAL_CACHE=""
+    KINIT_EXTRA_ARGS=()
+
+    DNS_SERVERS=()
+    DNS_SRV_NAME=""
+    NSUPDATE_EXTRA_ARGS=()
+
+    LOG_FILE=/var/log/gss-nsupdate.log
+    RETRY_DELAY=0.3
+}
+
+log() {
+    local message
+    message="[$(date '+%Y-%m-%d %H:%M:%S%z')] $*"
+    printf '%s\n' "$message"
+    if [[ -n "${LOG_FILE:-}" ]]; then
+        printf '%s\n' "$message" >> "$LOG_FILE" 2>/dev/null ||
+            printf 'WARNING: cannot write to log file %s\n' "$LOG_FILE" >&2
+    fi
+}
+
+die() {
+    log "ERROR: $*"
+    return 1
+}
+
+is_true() {
+    case "${1,,}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+valid_ipv4() {
+    local address=$1 octet
+    local -a octets
+
+    IFS=. read -r -a octets <<< "$address"
+    [[ ${#octets[@]} -eq 4 ]] || return 1
+    for octet in "${octets[@]}"; do
+        [[ $octet =~ ^[0-9]{1,3}$ ]] || return 1
+        (( 10#$octet <= 255 )) || return 1
+    done
+}
+
+valid_dns_name() {
+    local name=${1%.} label
+    local -a labels
+
+    [[ -n $name && ${#name} -le 253 ]] || return 1
+    IFS=. read -r -a labels <<< "$name"
+    for label in "${labels[@]}"; do
+        [[ ${#label} -le 63 ]] || return 1
+        [[ $label =~ ^[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?$ ]] || return 1
+    done
+}
+
+read_interface_addresses() {
+    local interface=$1
+    if ! ip link show dev "$interface" >/dev/null 2>&1; then
+        die "NIC '$interface' does not exist"
+        return 1
+    fi
+
+    mapfile -t INTERFACE_ADDRESSES < <(
+        ip -o -4 addr show dev "$interface" scope global 2>/dev/null |
+            awk '{split($4, address, "/"); print address[1]}'
+    )
+    if ((${#INTERFACE_ADDRESSES[@]} == 0)); then
+        die "no global IPv4 addresses found on $interface"
+        return 1
+    fi
+}
+
+select_addresses() {
+    local route_line="" route_ip="" route_nic=""
+    local address
+    local -a route_command=(ip -4 route get "$ROUTE_TARGET")
+
+    SELECTED_IPS=()
+    case "$ADDRESS_MODE" in
+        explicit)
+            if ((${#ADDRESSES[@]} > 0)); then
+                SELECTED_IPS=("${ADDRESSES[@]}")
+            else
+                die "explicit mode requires at least one address in ADDRESSES"
+                return 1
+            fi
+
+            for address in "${SELECTED_IPS[@]}"; do
+                if ! valid_ipv4 "$address"; then
+                    die "explicit address '$address' is not a valid IPv4 address"
+                    return 1
+                fi
+            done
+            SELECTED_NIC=unrestricted
+            return 0
+            ;;
+        primary|secondary|all|additional) ;;
+        *)
+            die "ADDRESS_MODE must be primary, secondary, all, additional, or explicit (got '$ADDRESS_MODE')"
+            return 1
+            ;;
+    esac
+
+    [[ -n "$NIC" ]] && route_command+=(oif "$NIC")
+    route_line=$("${route_command[@]}" 2>/dev/null || true)
+    if [[ -n "$route_line" ]]; then
+        route_ip=$(awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}' <<< "$route_line")
+        route_nic=$(awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}' <<< "$route_line")
+    fi
+
+    SELECTED_NIC=${NIC:-$route_nic}
+    if [[ -z "$SELECTED_NIC" ]]; then
+        die "cannot determine a NIC; configure NIC or a reachable ROUTE_TARGET"
+        return 1
+    fi
+
+    INTERFACE_ADDRESSES=()
+    read_interface_addresses "$SELECTED_NIC" || return 1
+
+    local primary_ip=$route_ip candidate route_ip_on_nic=false
+    for candidate in "${INTERFACE_ADDRESSES[@]}"; do
+        [[ $candidate == "$route_ip" ]] && route_ip_on_nic=true
+    done
+    if [[ -z "$primary_ip" || $route_ip_on_nic != true ]]; then
+        primary_ip=${INTERFACE_ADDRESSES[0]}
+    fi
+
+    if [[ $ADDRESS_MODE == primary ]]; then
+        SELECTED_IPS=("$primary_ip")
+        return 0
+    fi
+
+    if [[ $ADDRESS_MODE == all ]]; then
+        SELECTED_IPS=("${INTERFACE_ADDRESSES[@]}")
+        return 0
+    fi
+
+    ADDITIONAL_ADDRESSES=()
+    for candidate in "${INTERFACE_ADDRESSES[@]}"; do
+        [[ $candidate == "$primary_ip" ]] || ADDITIONAL_ADDRESSES+=("$candidate")
+    done
+
+    if ((${#ADDITIONAL_ADDRESSES[@]} == 0)); then
+        die "no additional IPv4 addresses are available on $SELECTED_NIC"
+        return 1
+    fi
+
+    if [[ $ADDRESS_MODE == additional ]]; then
+        SELECTED_IPS=("${ADDITIONAL_ADDRESSES[@]}")
+        return 0
+    fi
+
+    if [[ ! $ADDRESS_INDEX =~ ^[0-9]+$ ]]; then
+        die "ADDRESS_INDEX must be a non-negative integer"
+        return 1
+    fi
+    if ((${#ADDITIONAL_ADDRESSES[@]} <= ADDRESS_INDEX)); then
+        die "secondary IPv4 index $ADDRESS_INDEX is not available on $SELECTED_NIC"
+        return 1
+    fi
+    SELECTED_IPS=("${ADDITIONAL_ADDRESSES[$ADDRESS_INDEX]}")
+}
+
+discover_dns_servers() {
+    if ((${#DNS_SERVERS[@]} > 0)); then
+        return 0
+    fi
+
+    local realm_lower srv_query
+    realm_lower=${KERBEROS_REALM,,}
+    srv_query=${DNS_SRV_NAME:-_ldap._tcp.${realm_lower}}
+    mapfile -t DNS_SERVERS < <(
+        host -t SRV "$srv_query" 2>/dev/null |
+            awk '/has SRV record/ {print $(NF-3), $(NF-2), $NF}' |
+            sort -n -k1,1 -k2,2 |
+            awk '{print $3}'
+    )
+    if ((${#DNS_SERVERS[@]} == 0)); then
+        die "no DNS servers found for SRV record $srv_query"
+        return 1
+    fi
+}
+
+authenticate() {
+    local local_fqdn=$1 cache_path="" cache_owned=false
+    local machine_name
+
+    if [[ -z "$KERBEROS_REALM" ]]; then
+        if [[ $local_fqdn != *.* ]]; then
+            die "cannot derive KERBEROS_REALM from '$local_fqdn'"
+            return 1
+        fi
+        KERBEROS_REALM=${local_fqdn#*.}
+        KERBEROS_REALM=${KERBEROS_REALM^^}
+    fi
+    if [[ -z "$KEYTAB_PRINCIPAL" ]]; then
+        machine_name=${local_fqdn%%.*}
+        KEYTAB_PRINCIPAL="${machine_name^^}\$@${KERBEROS_REALM}"
+    fi
+
+    if [[ ! -r "$KEYTAB_FILE" ]]; then
+        die "keytab is not readable: $KEYTAB_FILE"
+        return 1
+    fi
+
+    if [[ -z "$CREDENTIAL_CACHE" ]]; then
+        if ! cache_path=$(mktemp "${TMPDIR:-/tmp}/gss-nsupdate.krb5cc.XXXXXX"); then
+            die "cannot create a temporary Kerberos credential cache"
+            return 1
+        fi
+        CREDENTIAL_CACHE="FILE:${cache_path}"
+        cache_owned=true
+    fi
+    export KRB5CCNAME=$CREDENTIAL_CACHE
+
+    if ! kinit "${KINIT_EXTRA_ARGS[@]}" -k -t "$KEYTAB_FILE" "$KEYTAB_PRINCIPAL" >/dev/null 2>&1; then
+        $cache_owned && rm -f -- "$cache_path"
+        die "kinit failed for $KEYTAB_PRINCIPAL using $KEYTAB_FILE"
+        return 1
+    fi
+
+    AUTH_CACHE_PATH=$cache_path
+    AUTH_CACHE_OWNED=$cache_owned
+    log "Authenticated as $KEYTAB_PRINCIPAL"
+}
+
+reverse_name() {
+    local address=$1 a b c d
+    IFS=. read -r a b c d <<< "$address"
+    printf '%s.%s.%s.%s.in-addr.arpa.' "$d" "$c" "$b" "$a"
+}
+
+send_a_update() {
+    local server=$1 address
+    {
+        printf 'server %s\n' "$server"
+        printf 'update delete %s. A\n' "$RECORD_FQDN"
+        for address in "${SELECTED_IPS[@]}"; do
+            printf 'update add %s. %s A %s\n' "$RECORD_FQDN" "$TTL" "$address"
+        done
+        printf 'send\n'
+    } | nsupdate -g "${NSUPDATE_EXTRA_ARGS[@]}" >/dev/null 2>&1
+}
+
+send_ptr_update() {
+    local server=$1 ptr_name=$2
+    nsupdate -g "${NSUPDATE_EXTRA_ARGS[@]}" >/dev/null 2>&1 <<EOF
+server ${server}
+update delete ${ptr_name} PTR
+update add ${ptr_name} ${TTL} PTR ${RECORD_FQDN}.
+send
+EOF
+}
+
+try_update() {
+    local kind=$1 ptr_name=${2:-} server
+    for server in "${DNS_SERVERS[@]}"; do
+        server=${server%.}
+        valid_dns_name "$server" || {
+            log "WARNING: ignoring invalid DNS server name '$server'"
+            continue
+        }
+        log "$kind update via $server"
+        if [[ $kind == A ]]; then
+            send_a_update "$server" && return 0
+        else
+            send_ptr_update "$server" "$ptr_name" && return 0
+        fi
+        log "WARNING: $kind update failed via $server"
+        sleep "$RETRY_DELAY"
+    done
+    die "$kind update failed on every configured DNS server"
+}
+
+process_config() {
+    local config_file=$1 local_fqdn ptr_name=""
+
+    # Each job runs in a subshell, so values cannot leak into the next job.
+    # shellcheck source=/dev/null
+    if ! source "$config_file"; then
+        die "could not load config: $config_file"
+        return 1
+    fi
+
+    if ! is_true "$ENABLED"; then
+        log "Skipping disabled config: $config_file"
+        return 0
+    fi
+
+    if ! local_fqdn=$(hostname -f 2>/dev/null); then
+        die "hostname -f failed"
+        return 1
+    fi
+    RECORD_FQDN=${RECORD_FQDN:-$local_fqdn}
+    RECORD_FQDN=${RECORD_FQDN%.}
+    if ! valid_dns_name "$RECORD_FQDN"; then
+        die "invalid RECORD_FQDN '$RECORD_FQDN'"
+        return 1
+    fi
+    if [[ ! $TTL =~ ^[1-9][0-9]*$ ]]; then
+        die "TTL must be a positive integer"
+        return 1
+    fi
+
+    select_addresses || return 1
+    log "Processing $config_file: $RECORD_FQDN -> ${SELECTED_IPS[*]} (NIC: $SELECTED_NIC)"
+
+    authenticate "$local_fqdn" || return 1
+    trap 'if [[ ${AUTH_CACHE_OWNED:-false} == true ]]; then kdestroy >/dev/null 2>&1 || true; rm -f -- "${AUTH_CACHE_PATH:-}"; fi' EXIT
+    discover_dns_servers || return 1
+    log "DNS servers: ${DNS_SERVERS[*]}"
+
+    if is_true "$UPDATE_A"; then
+        try_update A || return 1
+        log "A record updated: $RECORD_FQDN -> ${SELECTED_IPS[*]}"
+    fi
+    if is_true "$UPDATE_PTR"; then
+        local selected_ip
+        for selected_ip in "${SELECTED_IPS[@]}"; do
+            ptr_name=$(reverse_name "$selected_ip")
+            try_update PTR "$ptr_name" || return 1
+            log "PTR record updated: $ptr_name -> $RECORD_FQDN"
+        done
+    fi
+}
+
+main() {
+    local defaults_file config_file failures=0 processed=0
+    local -a config_files
+
+    set_builtin_defaults
+    defaults_file="$CONFIG_DIR/defaults.conf"
+    if [[ -f "$defaults_file" ]]; then
+        # shellcheck source=/dev/null
+        if ! source "$defaults_file"; then
+            die "could not load defaults: $defaults_file"
+            return 1
+        fi
+    fi
+
+    if [[ ! -d "$CONFIG_DIR" ]]; then
+        die "configuration directory does not exist: $CONFIG_DIR"
+        return 1
+    fi
+    shopt -s nullglob
+    config_files=("$CONFIG_DIR"/*.conf)
+    shopt -u nullglob
+
+    for config_file in "${config_files[@]}"; do
+        [[ $config_file == "$defaults_file" ]] && continue
+        ((processed += 1))
+        if ! (process_config "$config_file"); then
+            ((failures += 1))
+        fi
+    done
+
+    if ((processed == 0)); then
+        die "no record configs found in $CONFIG_DIR/*.conf"
+        return 1
+    fi
+    if ((failures > 0)); then
+        die "$failures of $processed record updates failed"
+    fi
+    log "All $processed record configs completed successfully"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main "$@"
+fi

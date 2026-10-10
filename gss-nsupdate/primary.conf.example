@@ -1,0 +1,11 @@
+# Copy to /etc/gss-nsupdate/primary.conf.
+# RECORD_FQDN defaults to `hostname -f`.
+
+RECORD_FQDN=""
+ADDRESS_MODE=primary
+
+# Optional per-record overrides:
+# NIC=ens192
+# TTL=900
+# KEYTAB_FILE=/etc/krb5.keytab
+# KEYTAB_PRINCIPAL='HOSTNAME$@EXAMPLE.INVALID'

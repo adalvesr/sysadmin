@@ -1,0 +1,13 @@
+# Copy to /etc/gss-nsupdate/secondary.conf and set the DNS name.
+
+RECORD_FQDN=server-vip.example.invalid
+ADDRESS_MODE=secondary
+
+# Select one non-primary address on the selected NIC. ADDRESS_INDEX is zero-based.
+NIC=""
+ADDRESS_INDEX=0
+
+# Alternatively, avoid interface discovery. Explicit mode may contain addresses
+# that are not configured on any local NIC:
+# ADDRESS_MODE=explicit
+# ADDRESSES=(192.0.2.25 192.0.2.26)
