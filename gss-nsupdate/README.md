@@ -25,11 +25,11 @@ sudo bash install.sh
 ```
 
 The installer places the executable at `/usr/local/sbin/gss-nsupdate`, creates
-`/etc/gss-nsupdate`, installs systemd service and timer units, and installs the
-documentation under `/usr/local/share/doc/gss-nsupdate`. It initializes
+`/etc/gss-nsupdate`, installs systemd and logrotate configuration, and installs
+the documentation under `/usr/local/share/doc/gss-nsupdate`. It initializes
 `defaults.conf` and `primary.conf` when they do not exist. Re-running it updates
-the executable, units, and examples while preserving active configuration
-files. The timer is not enabled automatically.
+the executable, system integration files, and examples while preserving active
+configuration files. The timer is not enabled automatically.
 
 Set `DESTDIR` to stage the same filesystem layout for packaging or testing:
 
@@ -37,9 +37,9 @@ Set `DESTDIR` to stage the same filesystem layout for packaging or testing:
 DESTDIR=/tmp/gss-nsupdate-root bash install.sh
 ```
 
-The runtime dependencies are Bash 4+, `ip`, `host`, `kinit`, `kdestroy`, and
-`nsupdate`. Run the script as an account that can read the configured keytab and
-write the configured log file.
+The runtime dependencies are Bash 4+, `ip`, `host`, `kinit`, `kdestroy`,
+`nsupdate`, and `logrotate`. Run the script as an account that can read the
+configured keytab and write the configured log file.
 
 ## systemd
 
@@ -76,6 +76,16 @@ OnCalendar=Mon..Fri 03:30
 
 Apply unit changes with `sudo systemctl daemon-reload` followed by
 `sudo systemctl restart gss-nsupdate.timer`.
+
+## Logging
+
+By default, the utility appends to `/var/log/gss-nsupdate.log`. The installed
+`/etc/logrotate.d/gss-nsupdate` policy rotates the log weekly, retains twelve
+archives, and compresses older archives. No service reload is required because
+the utility opens the log separately on each run.
+
+If `LOG_FILE` is changed in `defaults.conf` or a record configuration, update
+the path in `/etc/logrotate.d/gss-nsupdate` as well.
 
 ## Configuration
 

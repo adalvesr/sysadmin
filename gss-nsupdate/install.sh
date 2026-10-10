@@ -10,6 +10,7 @@ BIN_DIR="${INSTALL_ROOT}/usr/local/sbin"
 CONFIG_DIR="${INSTALL_ROOT}/etc/gss-nsupdate"
 DOC_DIR="${INSTALL_ROOT}/usr/local/share/doc/gss-nsupdate"
 SYSTEMD_DIR="${INSTALL_ROOT}/etc/systemd/system"
+LOGROTATE_DIR="${INSTALL_ROOT}/etc/logrotate.d"
 
 usage() {
     cat <<'EOF'
@@ -54,6 +55,7 @@ for source_file in \
     "$SCRIPT_DIR/secondary.conf.example" \
     "$SCRIPT_DIR/gss-nsupdate.service" \
     "$SCRIPT_DIR/gss-nsupdate.timer" \
+    "$SCRIPT_DIR/gss-nsupdate.logrotate" \
     "$PROJECT_ROOT/LICENSE" \
     "$SCRIPT_DIR/README.md"; do
     if [[ ! -f $source_file ]]; then
@@ -62,10 +64,12 @@ for source_file in \
     fi
 done
 
-install -d -m 0755 "$BIN_DIR" "$CONFIG_DIR" "$DOC_DIR" "$SYSTEMD_DIR"
+install -d -m 0755 \
+    "$BIN_DIR" "$CONFIG_DIR" "$DOC_DIR" "$SYSTEMD_DIR" "$LOGROTATE_DIR"
 install -m 0755 "$SCRIPT_DIR/gss-nsupdate" "$BIN_DIR/gss-nsupdate"
 install -m 0644 "$SCRIPT_DIR/gss-nsupdate.service" "$SYSTEMD_DIR/gss-nsupdate.service"
 install -m 0644 "$SCRIPT_DIR/gss-nsupdate.timer" "$SYSTEMD_DIR/gss-nsupdate.timer"
+install -m 0644 "$SCRIPT_DIR/gss-nsupdate.logrotate" "$LOGROTATE_DIR/gss-nsupdate"
 
 install -m 0644 "$SCRIPT_DIR/defaults.conf.example" "$CONFIG_DIR/defaults.conf.example"
 install -m 0644 "$SCRIPT_DIR/primary.conf.example" "$CONFIG_DIR/primary.conf.example"
@@ -88,10 +92,11 @@ install_if_missing "$SCRIPT_DIR/primary.conf.example" "$CONFIG_DIR/primary.conf"
 
 printf 'Installed executable: %s\n' "$BIN_DIR/gss-nsupdate"
 printf 'Installed systemd units: %s/{gss-nsupdate.service,gss-nsupdate.timer}\n' "$SYSTEMD_DIR"
+printf 'Installed logrotate configuration: %s/gss-nsupdate\n' "$LOGROTATE_DIR"
 
 if [[ -z $INSTALL_ROOT ]]; then
     missing_commands=()
-    for command_name in ip host kinit kdestroy nsupdate; do
+    for command_name in ip host kinit kdestroy nsupdate logrotate; do
         command -v "$command_name" >/dev/null 2>&1 || missing_commands+=("$command_name")
     done
     if ((${#missing_commands[@]} > 0)); then
