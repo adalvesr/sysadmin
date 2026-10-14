@@ -1,0 +1,3 @@
+# Disabled example: Oracle Linux 9 UEK Release 8.
+# Rename this file to end in .conf to include the repository during patching.
+ENABLED_REPOS+=(ol9_UEKR8)

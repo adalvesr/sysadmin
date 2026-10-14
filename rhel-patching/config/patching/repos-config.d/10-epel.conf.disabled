@@ -1,0 +1,4 @@
+# Disabled example: enable EPEL only on systems where its repository definition
+# is installed and site policy permits using it.
+# Rename this file to end in .conf to include EPEL during patching.
+ENABLED_REPOS+=(epel)

@@ -1,0 +1,60 @@
+###############################################
+# LVM Snapshot Configuration for Patching
+# ---------------------------------------------
+# This file defines which filesystem paths
+# should have LVM snapshots created before
+# patching. The script will:
+#
+#  - Resolve each path to its underlying LV
+#  - Deduplicate LVs (multiple paths on same LV)
+#  - Compute snapshot sizes (100% of LV size)
+#  - Compute per-VG reserved LV size dynamically
+#  - Remove reserved LV before snapshot creation
+#  - Create tagged snapshots using the configured prefix and suffix
+#
+# This workflow supports classic thick LVM snapshots. Thin LVs are detected
+# and rejected during preflight.
+#
+###############################################
+
+# List of filesystem paths to snapshot.
+# These paths may overlap; the script will
+# automatically deduplicate them.
+#
+# The defaults protect OS and package-manager state. Nested mount points are
+# not included in a parent filesystem snapshot. If application data such as
+# /var/lib/mysql is not on a separate filesystem, rolling back /var also rolls
+# back that application data. See README.md for the full rollback-scope model.
+LV_SNAP_PATHS=(
+    "/"
+    "/usr"
+    "/var"
+)
+
+# Snapshot names are built as:
+#   ${LVM_SNAPSHOT_NAME_PREFIX}<origin-lv>${LVM_SNAPSHOT_NAME_SUFFIX}
+LVM_SNAPSHOT_NAME_PREFIX="patching-"
+LVM_SNAPSHOT_NAME_SUFFIX=""
+
+# One reservation LV with this name can be maintained in each affected VG.
+LVM_RESERVATION_LV_NAME="patch-reserved"
+
+# LVM ownership tags prevent a same-named, unrelated LV from being removed or
+# extended. Snapshots also receive a per-wave tag derived from this base tag.
+LVM_RESERVATION_LV_TAG="patching-reservation"
+LVM_SNAPSHOT_LV_TAG="patching-snapshot"
+
+# Existing snapshots are reused only while they are healthy, below this usage
+# percentage, and no older than this many hours. Set the age to 0 to disable
+# only the age check; validity and utilization checks remain mandatory.
+LVM_MAX_SNAPSHOT_AGE_HOURS=48
+LVM_MAX_SNAPSHOT_DATA_PERCENT=90
+
+# Migration switches for LVs created by an older version of these scripts.
+# Leave disabled normally. To adopt a legacy LV, first verify its identity,
+# enable the applicable switch for one successful run, then disable it again.
+# An untagged reservation is adopted only if it is unmounted and has no
+# filesystem signature.
+LVM_ADOPT_UNTAGGED_RESERVATION=0
+LVM_ADOPT_UNTAGGED_SNAPSHOTS=0
+

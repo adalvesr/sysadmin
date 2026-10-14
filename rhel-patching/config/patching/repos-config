@@ -1,0 +1,32 @@
+# /etc/patching/repos-config
+
+# Repository profile selection:
+#
+#   auto      Detect the distribution and major release from /etc/os-release.
+#             RHEL systems with configured RHUI repositories automatically use
+#             the corresponding rhel-payg-* profile.
+#   manual    Do not load a shipped profile. Define ENABLED_REPOS below or in a
+#             drop-in under repos-config.d/.
+#   <profile> Force a shipped profile, for example rhel-9, rhel-payg-9,
+#             rocky-9, alma-9, or oracle-9.
+REPO_PROFILE="auto"
+
+# Example manual configuration:
+# REPO_PROFILE="manual"
+# ENABLED_REPOS+=(corp-baseos corp-appstream)
+
+# Repos we want to ensure are disabled (wins last).
+# Leave empty here; enforce via site/role drop-ins if needed.
+# DISABLED_REPOS+=(crb playground)
+
+# Packages we never want to update accidentally (add more via drop-ins).
+# BLACKLISTED_PACKAGES+=(kernel* docker* azure-cli*)
+
+# Extra DNF options (added as-is). Keep them in array form.
+EXTRA_DNF_OPTS+=(
+  --best
+  --setopt=install_weak_deps=False
+)
+
+# Common environment variables can also be set in repos-config.d/ drop-ins.
+
