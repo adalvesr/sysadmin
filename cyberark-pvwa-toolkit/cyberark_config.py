@@ -40,6 +40,16 @@ def _is_field(value: Any) -> bool:
     return isinstance(value, str) and value in FIELD_MAP
 
 
+def _is_string_or_string_list(value: Any) -> bool:
+    return _is_string(value) or _is_string_list(value)
+
+
+def _is_field_or_field_list(value: Any) -> bool:
+    return _is_field(value) or (
+        isinstance(value, list) and bool(value) and all(_is_field(item) for item in value)
+    )
+
+
 CONNECTION_SCHEMA: dict[str, Validator] = {
     "url": _is_string,
     "username": _is_string,
@@ -54,8 +64,8 @@ SELECTION_SCHEMA: dict[str, Validator] = {
     "hostname": _is_string,
     "file": _is_string,
     "platforms": _is_string_list,
-    "match": _is_string,
-    "field": _is_field,
+    "match": _is_string_or_string_list,
+    "field": _is_field_or_field_list,
     "include_domain_users": _is_bool,
 }
 

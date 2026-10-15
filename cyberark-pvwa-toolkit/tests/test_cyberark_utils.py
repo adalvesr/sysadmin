@@ -14,6 +14,7 @@ from cyberark_utils import (
     normalize_base_url,
     read_lines_dedup,
     regex_filter_accounts,
+    regex_filter_accounts_by_rules,
     split_values,
 )
 
@@ -110,6 +111,42 @@ class UtilityTests(unittest.TestCase):
         self.assertEqual(regex_filter_accounts(ACCOUNTS, "^Linux-P", "safe"), ACCOUNTS[:2])
         with self.assertRaises(ConfigurationError):
             regex_filter_accounts(ACCOUNTS, "[", "user")
+
+    def test_one_match_can_search_multiple_fields(self):
+        self.assertEqual(
+            regex_filter_accounts_by_rules(
+                ACCOUNTS, ["example\\.com$"], ["user", "address"]
+            ),
+            ACCOUNTS,
+        )
+
+    def test_multiple_field_match_pairs_are_anded(self):
+        self.assertEqual(
+            regex_filter_accounts_by_rules(
+                ACCOUNTS,
+                ["^root$", "^Linux-Prod$"],
+                ["user", "safe"],
+            ),
+            [ACCOUNTS[0]],
+        )
+
+    def test_multiple_matches_can_apply_to_one_field(self):
+        self.assertEqual(
+            regex_filter_accounts_by_rules(
+                ACCOUNTS,
+                ["^Linux", "Prod$"],
+                ["safe"],
+            ),
+            ACCOUNTS[:2],
+        )
+
+    def test_ambiguous_filter_counts_are_rejected(self):
+        with self.assertRaisesRegex(ConfigurationError, "Repeat --field and --match"):
+            regex_filter_accounts_by_rules(
+                ACCOUNTS,
+                ["one", "two"],
+                ["user", "safe", "address"],
+            )
 
     def test_extract_file_categories_keeps_newest_value(self):
         activities = [

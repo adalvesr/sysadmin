@@ -15,6 +15,9 @@ platforms = ["UnixSSH", "UnixSSHKeys"]
 file = "hosts.txt"
 include_domain_users = false
 field = "user"
+# Repeat fields and matches to create ANDed filter pairs.
+# field = ["user", "safe"]
+# match = ["^svc_", "^Linux-Prod$"]
 
 [commands.list]
 activity_category = "DiscoveryPlatformType"

@@ -160,6 +160,73 @@ def regex_filter_accounts(
     ]
 
 
+def regex_filter_accounts_by_rules(
+    accounts: Iterable[Mapping[str, Any]],
+    patterns: Sequence[str] | None,
+    field_keys: Sequence[str] | None,
+) -> list[dict[str, Any]]:
+    """Filter accounts with repeatable field and regular-expression arguments.
+
+    Equal-sized field and pattern lists are paired and ANDed. A single pattern
+    with multiple fields matches when any field matches. Multiple patterns with
+    one field must all match that field.
+    """
+
+    copied = [dict(account) for account in accounts]
+    matches = list(patterns or [])
+    fields = list(field_keys or []) or ["user"]
+    if not matches:
+        return copied
+
+    invalid_fields = [field for field in fields if field not in FIELD_MAP]
+    if invalid_fields:
+        raise ConfigurationError(
+            f"Unsupported filter field: {invalid_fields[0]}"
+        )
+
+    expressions: list[re.Pattern[str]] = []
+    for pattern in matches:
+        try:
+            expressions.append(re.compile(pattern))
+        except re.error as exc:
+            raise ConfigurationError(
+                f"Invalid regular expression {pattern!r}: {exc}"
+            ) from exc
+
+    def field_matches(
+        account: Mapping[str, Any], field: str, expression: re.Pattern[str]
+    ) -> bool:
+        value = str(account.get(FIELD_MAP[field]) or "")
+        return expression.search(value) is not None
+
+    if len(expressions) == len(fields):
+        return [
+            account
+            for account in copied
+            if all(
+                field_matches(account, field, expression)
+                for field, expression in zip(fields, expressions)
+            )
+        ]
+    if len(expressions) == 1:
+        expression = expressions[0]
+        return [
+            account
+            for account in copied
+            if any(field_matches(account, field, expression) for field in fields)
+        ]
+    if len(fields) == 1:
+        field = fields[0]
+        return [
+            account
+            for account in copied
+            if all(field_matches(account, field, expression) for expression in expressions)
+        ]
+    raise ConfigurationError(
+        "Repeat --field and --match equally, or provide one field or one match"
+    )
+
+
 def extract_file_categories(activities: Iterable[Mapping[str, Any]]) -> dict[str, str]:
     """Extract the newest file-category value from newest-first activities."""
 

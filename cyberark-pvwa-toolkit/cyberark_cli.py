@@ -21,7 +21,7 @@ from cyberark_utils import (
     collect_targets,
     extract_file_categories,
     filter_accounts,
-    regex_filter_accounts,
+    regex_filter_accounts_by_rules,
     split_values,
 )
 
@@ -95,7 +95,22 @@ def warning(message: str) -> None:
     print(f"[WARN] {message}", file=sys.stderr)
 
 
-def add_target_arguments(parser: argparse.ArgumentParser, defaults: dict[str, Any]) -> None:
+def option_list(value: Any) -> list[str]:
+    """Normalize a scalar or list config default for a repeatable CLI option."""
+
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    return [str(value)]
+
+
+def add_target_arguments(
+    parser: argparse.ArgumentParser,
+    defaults: dict[str, Any],
+    *,
+    default_field: str = "user",
+) -> None:
     targets = parser.add_argument_group("target selection")
     targets.add_argument(
         "-H", "--hostname", default=defaults.get("hostname"), help="one account address/hostname"
@@ -120,14 +135,17 @@ def add_target_arguments(parser: argparse.ArgumentParser, defaults: dict[str, An
     targets.add_argument(
         "-m",
         "--match",
-        default=defaults.get("match"),
-        help="regular expression applied after selection",
+        action=OverrideAppendAction,
+        default=option_list(defaults.get("match")),
+        help="regular expression applied after selection; repeatable",
     )
     targets.add_argument(
+        "-F",
         "--field",
+        action=OverrideAppendAction,
         choices=tuple(FIELD_MAP),
-        default=defaults.get("field", "user"),
-        help="account field used by --match (default: user)",
+        default=option_list(defaults.get("field", default_field)),
+        help=f"account field used by --match; repeatable (default: {default_field})",
     )
     targets.add_argument(
         "--include-domain-users",
@@ -226,7 +244,7 @@ def build_parser(
     password_parser = commands.add_parser(
         "update-password", help="set one account user's Vault-only password"
     )
-    add_target_arguments(password_parser, password_defaults)
+    add_target_arguments(password_parser, password_defaults, default_field="safe")
     add_mutation_argument(password_parser)
     password_parser.add_argument(
         "--account-user",
@@ -345,7 +363,7 @@ def selected_accounts(
         excluded_usernames=excluded_usernames,
         local_only=not args.include_domain_users,
     )
-    return regex_filter_accounts(accounts, args.match, args.field)
+    return regex_filter_accounts_by_rules(accounts, args.match, args.field)
 
 
 def print_account(account: dict[str, Any], *, prefix: str = "  ") -> None:

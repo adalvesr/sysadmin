@@ -51,6 +51,48 @@ class CliSafetyTests(unittest.TestCase):
             [],
         )
 
+    def test_original_target_and_filter_options_are_supported(self):
+        args = self.parser.parse_args(
+            [
+                "list",
+                "-H",
+                "host01.example.com",
+                "-f",
+                "hosts.txt",
+                "-F",
+                "user",
+                "-m",
+                "^svc_",
+            ]
+        )
+        self.assertEqual(args.hostname, "host01.example.com")
+        self.assertEqual(args.file, "hosts.txt")
+        self.assertEqual(args.field, ["user"])
+        self.assertEqual(args.match, ["^svc_"])
+
+    def test_fields_and_matches_are_repeatable(self):
+        args = self.parser.parse_args(
+            [
+                "list",
+                "--hostname",
+                "host01.example.com",
+                "--field",
+                "user",
+                "--match",
+                "^svc_",
+                "--field",
+                "safe",
+                "--match",
+                "^Linux-Prod$",
+            ]
+        )
+        self.assertEqual(args.field, ["user", "safe"])
+        self.assertEqual(args.match, ["^svc_", "^Linux-Prod$"])
+
+    def test_password_update_retains_safe_as_default_filter_field(self):
+        args = self.parse_update("--match", "^Linux-Prod$")
+        self.assertEqual(args.field, ["safe"])
+
     @patch("builtins.input")
     def test_configured_username_does_not_prompt(self, prompt):
         self.assertEqual(read_username_or_prompt("operator"), "operator")

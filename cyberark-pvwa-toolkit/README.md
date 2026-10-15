@@ -92,6 +92,22 @@ pvwa-toolkit list --hostname linux01.example.com
 pvwa-toolkit list --file hosts.txt --match '^app_' --field user
 ```
 
+`-H/--hostname` and `-f/--file` can be combined; targets are de-duplicated.
+`-F/--field` and `-m/--match` are repeatable. Equal numbers form pairs and all
+pairs must match:
+
+```bash
+pvwa-toolkit list -f hosts.txt -F user -m '^svc_' -F safe -m '^Linux-Prod$'
+```
+
+One match with several fields selects an account when any field matches. Several
+matches with one field require every expression to match that field:
+
+```bash
+pvwa-toolkit list -H linux01.example.com -F user -F safe -m 'oracle|production'
+pvwa-toolkit list -f hosts.txt -F safe -m '^Linux-' -m 'Prod$'
+```
+
 Preview a Vault-only password update for one account name on each host, then
 apply the reviewed change:
 

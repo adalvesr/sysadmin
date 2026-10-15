@@ -28,6 +28,8 @@ ca_bundle = "certs/ca.pem"
 [selection]
 file = "hosts.txt"
 platforms = ["UnixSSH"]
+field = ["user", "safe"]
+match = ["^svc_", "^Linux-Prod$"]
 """,
             )
             config = load_config(path)
@@ -39,6 +41,10 @@ platforms = ["UnixSSH"]
             self.assertEqual(
                 config["selection"]["file"],
                 str((Path(directory) / "hosts.txt").resolve()),
+            )
+            self.assertEqual(config["selection"]["field"], ["user", "safe"])
+            self.assertEqual(
+                config["selection"]["match"], ["^svc_", "^Linux-Prod$"]
             )
 
     def test_rejects_unknown_and_secret_options(self):
