@@ -2,10 +2,11 @@
 
 [connection]
 url = "https://vault.example/PasswordVault"
-username = "pvwa-operator"
 auth_type = "LDAP"
-login_password_env = "CYBERARK_LOGIN_PASSWORD"
 timeout = 45
+# Omit these settings to be prompted for credentials.
+# username = "pvwa-operator"
+# login_password_env = "CYBERARK_LOGIN_PASSWORD"
 # ca_bundle = "certificates/company-ca.pem"
 # insecure = false
 

@@ -35,6 +35,7 @@ arguments. The precedence from highest to lowest is:
 2. Environment variables
 3. TOML configuration
 4. Built-in defaults
+5. Interactive credential prompts
 
 Copy [`pvwa-toolkit.example.toml`](pvwa-toolkit.example.toml) to a private location and
 adjust it for the environment. Relative host-list and CA-bundle paths are
@@ -59,6 +60,7 @@ export CYBERARK_PVWA_URL='https://vault.example/PasswordVault'
 export CYBERARK_USERNAME='operator@example.com'
 export CYBERARK_AUTH_TYPE='LDAP'
 export CYBERARK_PLATFORMS='UnixSSH,UnixSSHKeys'
+# CYBERARK_LOGIN_PASSWORD may be populated by a secret manager for unattended use.
 ```
 
 `CYBERARK_PLATFORMS` is a comma-separated allowlist. Mutation commands refuse
@@ -68,11 +70,14 @@ private CA. `--insecure` should only be used for controlled troubleshooting.
 
 Configuration files reject unknown options, plaintext password fields, and the
 `execute` option. Mutation therefore remains a deliberate command-line action.
-Passwords are prompted without echo. For non-interactive jobs, point
-`--login-password-env` and (where applicable) `--new-password-env` at named
-environment variables. Passwords are intentionally not accepted directly as
-arguments because process command lines are often logged or visible to other
-users.
+When credentials are not configured, the CLI prompts for the PVWA username and
+prompts for the password without echo. `CYBERARK_LOGIN_PASSWORD` is detected
+automatically for unattended use. A different secret variable can be selected
+with `--login-password-env` or `[connection].login_password_env`. The
+`--new-password-env` option provides the same indirection for password-update
+operations. Passwords are intentionally not accepted directly as arguments or
+configuration values because process command lines and files are often logged
+or broadly readable.
 
 ## Commands
 

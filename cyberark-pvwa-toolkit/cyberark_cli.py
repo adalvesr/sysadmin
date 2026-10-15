@@ -151,6 +151,11 @@ def build_parser(
 ) -> argparse.ArgumentParser:
     config = config or {}
     connection = config.get("connection", {})
+    login_password_env = (
+        "CYBERARK_LOGIN_PASSWORD"
+        if os.getenv("CYBERARK_LOGIN_PASSWORD") is not None
+        else connection.get("login_password_env")
+    )
     parser = argparse.ArgumentParser(
         description="CyberArk PVWA account administration toolkit.",
     )
@@ -168,7 +173,7 @@ def build_parser(
         "-u",
         "--username",
         default=environment_or("CYBERARK_USERNAME", connection.get("username")),
-        help="PVWA username (or CYBERARK_USERNAME)",
+        help="PVWA username (or CYBERARK_USERNAME; prompt if omitted)",
     )
     parser.add_argument(
         "--auth-type",
@@ -178,8 +183,8 @@ def build_parser(
     parser.add_argument(
         "--login-password-env",
         metavar="NAME",
-        default=connection.get("login_password_env"),
-        help="read the logon password from this environment variable",
+        default=login_password_env,
+        help="environment variable holding the logon password",
     )
     tls = parser.add_mutually_exclusive_group()
     tls.add_argument(
@@ -379,15 +384,34 @@ def command_list(client: CyberArkClient, args: argparse.Namespace) -> int:
 def read_secret_from_env_or_prompt(variable: str | None, prompt: str) -> str:
     if variable:
         value = os.getenv(variable)
-        if value is None:
-            raise ConfigurationError(f"Environment variable {variable!r} is not set")
-        if not value:
-            raise ConfigurationError(f"Environment variable {variable!r} is empty")
-        return value
-    value = getpass.getpass(prompt)
+        if value:
+            return value
+    try:
+        value = getpass.getpass(prompt)
+    except EOFError as exc:
+        raise ConfigurationError(
+            "PVWA password is required; interactive input is unavailable"
+        ) from exc
     if not value:
         raise ConfigurationError("Password must not be empty")
     return value
+
+
+def read_username_or_prompt(value: str | None) -> str:
+    """Return a configured username or request one interactively."""
+
+    username = (value or "").strip()
+    if username:
+        return username
+    try:
+        username = input("PVWA username: ").strip()
+    except EOFError as exc:
+        raise ConfigurationError(
+            "PVWA username is required; interactive input is unavailable"
+        ) from exc
+    if not username:
+        raise ConfigurationError("PVWA username must not be empty")
+    return username
 
 
 def command_update_password(client: CyberArkClient, args: argparse.Namespace) -> int:
@@ -620,19 +644,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.url:
             raise ConfigurationError("Set --url, CYBERARK_PVWA_URL, or [connection].url")
-        if not args.username:
-            raise ConfigurationError(
-                "Set --username, CYBERARK_USERNAME, or [connection].username"
-            )
         if args.insecure and args.ca_bundle:
             raise ConfigurationError("insecure and ca_bundle are mutually exclusive")
         verify: bool | str = args.ca_bundle or not args.insecure
+        username = read_username_or_prompt(args.username)
         password = read_secret_from_env_or_prompt(
             args.login_password_env, "PVWA password: "
         )
         with CyberArkClient(args.url, verify=verify, timeout=args.timeout) as client:
             info(f"Authenticating with {args.auth_type}...")
-            client.login(args.username, password, args.auth_type)
+            client.login(username, password, args.auth_type)
             success("Authenticated.")
             return int(args.handler(client, args))
     except (CyberArkError, OSError) as exc:

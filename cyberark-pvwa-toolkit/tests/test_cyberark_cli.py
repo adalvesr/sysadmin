@@ -4,7 +4,12 @@ import argparse
 import unittest
 from unittest.mock import patch
 
-from cyberark_cli import build_parser, platforms_from_args
+from cyberark_cli import (
+    build_parser,
+    platforms_from_args,
+    read_secret_from_env_or_prompt,
+    read_username_or_prompt,
+)
 from cyberark_utils import ConfigurationError
 
 
@@ -45,6 +50,48 @@ class CliSafetyTests(unittest.TestCase):
             platforms_from_args(self.parse_update("--all-platforms"), mutation=True),
             [],
         )
+
+    @patch("builtins.input")
+    def test_configured_username_does_not_prompt(self, prompt):
+        self.assertEqual(read_username_or_prompt("operator"), "operator")
+        prompt.assert_not_called()
+
+    @patch("builtins.input", return_value="  prompted-operator  ")
+    def test_missing_username_prompts(self, prompt):
+        self.assertEqual(read_username_or_prompt(None), "prompted-operator")
+        prompt.assert_called_once_with("PVWA username: ")
+
+    @patch("builtins.input", return_value="")
+    def test_empty_prompted_username_is_rejected(self, _prompt):
+        with self.assertRaisesRegex(ConfigurationError, "must not be empty"):
+            read_username_or_prompt(None)
+
+    @patch.dict(
+        "os.environ",
+        {"CYBERARK_LOGIN_PASSWORD": "secret-value"},
+        clear=True,
+    )
+    def test_conventional_password_environment_variable_is_detected(self):
+        args = build_parser().parse_args(["list", "--hostname", "host01"])
+        self.assertEqual(args.login_password_env, "CYBERARK_LOGIN_PASSWORD")
+
+    @patch.dict("os.environ", {"LOGIN_SECRET": "from-environment"}, clear=True)
+    @patch("getpass.getpass")
+    def test_password_comes_from_environment_without_prompt(self, prompt):
+        self.assertEqual(
+            read_secret_from_env_or_prompt("LOGIN_SECRET", "PVWA password: "),
+            "from-environment",
+        )
+        prompt.assert_not_called()
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("getpass.getpass", return_value="prompted-secret")
+    def test_missing_password_environment_variable_falls_back_to_prompt(self, prompt):
+        self.assertEqual(
+            read_secret_from_env_or_prompt("LOGIN_SECRET", "PVWA password: "),
+            "prompted-secret",
+        )
+        prompt.assert_called_once_with("PVWA password: ")
 
 
 if __name__ == "__main__":
