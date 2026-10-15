@@ -1,0 +1,8 @@
+# Tested dependency set for the default Python 3.9 runtime in RHEL 9.
+# Keep this file in sync with the direct dependencies in pyproject.toml.
+certifi==2025.8.3
+charset-normalizer==3.4.3
+idna==3.10
+requests==2.32.5
+tomli==2.2.1; python_version < "3.11"
+urllib3==2.5.0

@@ -5,16 +5,25 @@ common account-administration workflows.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.9 or newer (the default Python runtime in RHEL 9)
 - Network access to the PVWA API
 - A PVWA user with the permissions required by the selected operation
 
-Create a virtual environment and install the project:
+On RHEL 9, install Python and create a virtual environment:
 
 ```bash
+sudo dnf install python3 python3-pip
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -e '.[dev]'
+python3 -m pip install --constraint constraints-rhel9.txt .
+```
+
+`constraints-rhel9.txt` pins the Python 3.9-compatible HTTP dependency set so
+pip does not need to backtrack through releases that have dropped Python 3.9.
+For a development installation, include the pinned linting extra:
+
+```bash
+python3 -m pip install --constraint constraints-rhel9.txt '.[dev]'
 ```
 
 ## Configuration
