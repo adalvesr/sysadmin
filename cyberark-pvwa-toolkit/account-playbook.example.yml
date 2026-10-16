@@ -1,0 +1,41 @@
+version: 1
+connection: production
+
+# The playbook supplies policy; the caller supplies -H/--hostname or -f/--file.
+required_selectors:
+  - addresses
+
+tasks:
+  - name: Configure discovered SSH-key accounts
+    target: accounts
+
+    select:
+      platforms:
+        - UnixSSH
+        - UnixSSHKeys
+
+      discovery_platform_types:
+        - Unix SSH Key
+
+      match:
+        all:
+          - field: user
+            regex: "^(root|oracle)$"
+
+    actions:
+      - list:
+          fields:
+            - id
+            - user
+            - address
+            - safe
+            - platform
+
+      - change_platform:
+          platform: UnixSSHKeys
+
+      - set_management:
+          enabled: false
+          reason: SSH key account
+
+      - reconcile: {}

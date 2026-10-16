@@ -12,7 +12,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from cyberark_config import command_defaults, load_config
+from cyberark_config import command_defaults, connection_defaults, load_config
+from cyberark_v2_cli import add_resource_parsers, preload_playbook
 from cyberark_utils import (
     FIELD_MAP,
     ConfigurationError,
@@ -166,9 +167,10 @@ def add_mutation_argument(parser: argparse.ArgumentParser) -> None:
 def build_parser(
     config: dict[str, Any] | None = None,
     config_path: str | None = None,
+    profile: str | None = None,
 ) -> argparse.ArgumentParser:
     config = config or {}
-    connection = config.get("connection", {})
+    selected_profile, connection = connection_defaults(config, profile)
     login_password_env = (
         "CYBERARK_LOGIN_PASSWORD"
         if os.getenv("CYBERARK_LOGIN_PASSWORD") is not None
@@ -181,6 +183,11 @@ def build_parser(
         "--config",
         default=config_path,
         help="TOML config file (or CYBERARK_CONFIG)",
+    )
+    parser.add_argument(
+        "--profile",
+        default=selected_profile,
+        help="named connection profile from the TOML config",
     )
     parser.add_argument(
         "--url",
@@ -327,6 +334,8 @@ def build_parser(
         help="random password length",
     )
     rotate_parser.set_defaults(handler=command_rotate_reconcile)
+
+    add_resource_parsers(commands)
 
     return parser
 
@@ -646,19 +655,77 @@ def perform_per_account(
     return 2 if failures else 0
 
 
+_GLOBAL_VALUE_OPTIONS = {
+    "--config",
+    "--profile",
+    "--url",
+    "-u",
+    "--username",
+    "--auth-type",
+    "--login-password-env",
+    "--ca-bundle",
+    "--timeout",
+}
+_GLOBAL_FLAG_OPTIONS = {"-k", "--insecure"}
+
+
+def normalize_global_arguments(arguments: list[str]) -> list[str]:
+    """Allow connection options before or after resource/action keywords."""
+
+    global_arguments: list[str] = []
+    remaining: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in _GLOBAL_VALUE_OPTIONS:
+            if index + 1 >= len(arguments):
+                raise ConfigurationError(f"Missing value for {argument}")
+            global_arguments.extend([argument, arguments[index + 1]])
+            index += 2
+            continue
+        if argument in _GLOBAL_FLAG_OPTIONS or (
+            argument.startswith("-u") and not argument.startswith("--") and len(argument) > 2
+        ):
+            global_arguments.append(argument)
+            index += 1
+            continue
+        if any(
+            argument.startswith(f"{option}=")
+            for option in _GLOBAL_VALUE_OPTIONS
+            if option.startswith("--")
+        ):
+            global_arguments.append(argument)
+            index += 1
+            continue
+        remaining.append(argument)
+        index += 1
+    return [*global_arguments, *remaining]
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        normalized_arguments = normalize_global_arguments(raw_arguments)
+    except ConfigurationError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config", default=os.getenv("CYBERARK_CONFIG"))
-    config_args, _ = config_parser.parse_known_args(raw_arguments)
+    config_parser.add_argument("--profile")
+    config_args, _ = config_parser.parse_known_args(normalized_arguments)
     try:
         config = load_config(config_args.config)
+        parser = build_parser(config, config_args.config, config_args.profile)
+        args = parser.parse_args(normalized_arguments)
+        playbook = preload_playbook(args)
+        if playbook is not None and playbook.connection and config_args.profile is None:
+            parser = build_parser(config, config_args.config, playbook.connection)
+            args = parser.parse_args(normalized_arguments)
+        if playbook is not None:
+            args.loaded_playbook = playbook
     except (CyberArkError, OSError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1
-
-    parser = build_parser(config, config_args.config)
-    args = parser.parse_args(raw_arguments)
     try:
         if not args.url:
             raise ConfigurationError("Set --url, CYBERARK_PVWA_URL, or [connection].url")

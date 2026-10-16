@@ -43,7 +43,7 @@ resolved relative to the config file, not the current working directory.
 
 ```bash
 cp pvwa-toolkit.example.toml pvwa-toolkit.toml
-pvwa-toolkit --config ./pvwa-toolkit.toml list
+pvwa-toolkit --config ./pvwa-toolkit.toml accounts -H host01 list
 ```
 
 Alternatively, select the file once for the current shell:
@@ -59,14 +59,13 @@ Connection values can also be stored directly in environment variables:
 export CYBERARK_PVWA_URL='https://vault.example/PasswordVault'
 export CYBERARK_USERNAME='operator@example.com'
 export CYBERARK_AUTH_TYPE='LDAP'
-export CYBERARK_PLATFORMS='UnixSSH,UnixSSHKeys'
 # CYBERARK_LOGIN_PASSWORD may be populated by a secret manager for unattended use.
 ```
 
-`CYBERARK_PLATFORMS` is a comma-separated allowlist. Mutation commands refuse
-to run without a platform allowlist unless `--all-platforms` is explicitly
-provided. TLS certificates are verified by default; use `--ca-bundle` for a
-private CA. `--insecure` should only be used for controlled troubleshooting.
+Named connection profiles are selected with `--profile` or `default_profile`.
+Connection options are accepted anywhere on the command line. TLS certificates
+are verified by default; use `--ca-bundle` for a private CA. `--insecure`
+should only be used for controlled troubleshooting.
 
 Configuration files reject unknown options, plaintext password fields, and the
 `execute` option. Mutation therefore remains a deliberate command-line action.
@@ -79,67 +78,103 @@ operations. Passwords are intentionally not accepted directly as arguments or
 configuration values because process command lines and files are often logged
 or broadly readable.
 
-## Commands
+## Account commands
 
-The global connection options come before the subcommand. Run
-`pvwa-toolkit --help` or `pvwa-toolkit <command> --help` for the complete
-interface.
+The resource-oriented command form places selectors before the action:
 
-List local accounts and show their discovery platform type:
-
-```bash
-pvwa-toolkit list --hostname linux01.example.com
-pvwa-toolkit list --file hosts.txt --match '^app_' --field user
+```text
+pvwa-toolkit [connection options] accounts [selectors] ACTION [action options]
 ```
 
-`-H/--hostname` and `-f/--file` can be combined; targets are de-duplicated.
-`-F/--field` and `-m/--match` are repeatable. Equal numbers form pairs and all
-pairs must match:
+`-H/--hostname/--address` and `-f/--file/--address-file` form one address
+category. Explicit values and every file are unioned and de-duplicated. Values
+inside another category are also ORed; different categories are ANDed:
 
 ```bash
-pvwa-toolkit list -f hosts.txt -F user -m '^svc_' -F safe -m '^Linux-Prod$'
+pvwa-toolkit accounts \
+  -H host01 -f additional-hosts.txt \
+  --account root --account oracle \
+  --platform UnixSSH --platform UnixSSHKeys \
+  list
 ```
 
-One match with several fields selects an account when any field matches. Several
-matches with one field require every expression to match that field:
+Use `--where FIELD REGEX` for ANDed regex rules and `--where-any FIELD REGEX`
+for an OR group. The older `-F/--field` and `-m/--match` pair remains accepted:
 
 ```bash
-pvwa-toolkit list -H linux01.example.com -F user -F safe -m 'oracle|production'
-pvwa-toolkit list -f hosts.txt -F safe -m '^Linux-' -m 'Prod$'
+pvwa-toolkit accounts -f hosts.txt \
+  --where user '^svc_' --where safe '^Linux-Prod$' list
 ```
 
-Preview a Vault-only password update for one account name on each host, then
-apply the reviewed change:
+Activity file categories are selectors. `--dpt` is an alias for the commonly
+used `DiscoveryPlatformType` category:
 
 ```bash
-pvwa-toolkit update-password --file hosts.txt --account-user reconcile_svc
-pvwa-toolkit update-password --file hosts.txt --account-user reconcile_svc --execute
+pvwa-toolkit accounts -f hosts.txt --dpt 'Unix SSH Key' list
+pvwa-toolkit accounts -f hosts.txt \
+  --activity AccountType 'Operating System' \
+  --activity-match DiscoveryPlatformType '^Unix .*Key$' list
 ```
 
-Preview and apply a platform/management-policy change for discovered SSH keys:
+Available actions are `list`, `set-password`, `copy-password`, `link-account`,
+`change-platform`, `move-safe`, `set-management`, and `reconcile`. Mutations
+are previews unless `--execute` is present and require an address or account-ID
+scope unless `--all-accounts` is explicit.
+
+`move-safe` is reserved in the v2 grammar but execution is intentionally blocked
+until a supported safe-move adapter is selected for the target PVWA version; the
+toolkit does not emulate it with a destructive retrieve/delete/recreate sequence.
+
+Password behavior is always explicit:
 
 ```bash
-pvwa-toolkit set-ssh-key-policy --file hosts.txt --target-platform UnixSSHKeys
-pvwa-toolkit set-ssh-key-policy --file hosts.txt --target-platform UnixSSHKeys --execute
+pvwa-toolkit accounts -f hosts.txt --account reconcile_svc \
+  set-password --mode prompt-shared --execute
+
+pvwa-toolkit accounts -f hosts.txt --account root \
+  set-password --mode random-distinct --length 30 --execute
 ```
 
-Link a reconciliation account to the other selected accounts on each host:
+The modes are `prompt-shared`, `prompt-distinct`, `random-shared`,
+`random-distinct`, and `environment-shared`. Prompted passwords are confirmed;
+generated passwords and prompts occur only during execution and are never
+written to normal output.
+
+Copying a password uses a separate, exactly-one-account source selector:
 
 ```bash
-pvwa-toolkit link-reconcile --file hosts.txt --reconcile-user reconcile_svc
-pvwa-toolkit link-reconcile --file hosts.txt --reconcile-user reconcile_svc --execute
+pvwa-toolkit accounts -f hosts.txt --account local_admin \
+  copy-password --source-id SOURCE_ACCOUNT_ID --execute
 ```
 
-Set a unique random Vault value and trigger CPM reconciliation:
+## Playbooks
+
+YAML playbooks provide ordered account actions. See
+[`account-playbook.example.yml`](account-playbook.example.yml). Runtime CLI
+selectors supply or narrow playbook selectors, so inventories do not need to be
+embedded in the playbook:
 
 ```bash
-pvwa-toolkit rotate-reconcile --file hosts.txt --exclude-user reconcile_svc
-pvwa-toolkit rotate-reconcile --file hosts.txt --exclude-user reconcile_svc --execute
+pvwa-toolkit --config ./pvwa-toolkit.toml playbook \
+  -f production-hosts.txt \
+  run account-playbook.example.yml
+
+pvwa-toolkit playbook -f production-hosts.txt \
+  run account-playbook.example.yml --execute
 ```
 
-All mutation commands are previews unless `--execute` is present. Selection
-always performs an exact, case-insensitive address match after the PVWA search,
-and excludes usernames containing `@` unless `--include-domain-users` is used.
+A selector category present only on the CLI is supplied to every task. A
+category present only in the playbook is retained. When both provide the same
+category, their values are intersected. Playbooks can declare required
+categories such as `addresses`; validation occurs before any account mutation.
+Each task resolves and freezes its account IDs before its ordered actions run.
+
+## Compatibility commands
+
+The original `list`, `update-password`, `set-ssh-key-policy`, `link-reconcile`,
+and `rotate-reconcile` commands remain available during migration. New
+automation should use the `accounts` and `playbook` resource commands.
+
 The process exits with `0` on success, `1` for configuration or session errors,
 and `2` when one or more per-account operations fail.
 

@@ -1,6 +1,8 @@
 # Copy this file and adjust it for an environment. Never store passwords here.
 
-[connection]
+default_profile = "production"
+
+[connections.production]
 url = "https://vault.example/PasswordVault"
 auth_type = "LDAP"
 timeout = 45

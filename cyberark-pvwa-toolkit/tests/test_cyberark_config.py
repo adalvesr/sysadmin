@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cyberark_cli import build_parser, platforms_from_args
-from cyberark_config import load_config
+from cyberark_config import connection_defaults, load_config
 from cyberark_utils import ConfigurationError
 
 
@@ -83,6 +83,31 @@ ca_bundle = "ca.pem"
             )
             with self.assertRaisesRegex(ConfigurationError, "mutually exclusive"):
                 load_config(path)
+
+    def test_loads_named_connection_profiles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_config(
+                directory,
+                """
+default_profile = "production"
+
+[connections.production]
+url = "https://production.example/PasswordVault"
+auth_type = "LDAP"
+
+[connections.development]
+url = "https://development.example/PasswordVault"
+""",
+            )
+            config = load_config(path)
+            name, connection = connection_defaults(config)
+            self.assertEqual(name, "production")
+            self.assertEqual(connection["auth_type"], "LDAP")
+            name, connection = connection_defaults(config, "development")
+            self.assertEqual(name, "development")
+            self.assertEqual(
+                connection["url"], "https://development.example/PasswordVault"
+            )
 
     @patch.dict("os.environ", {}, clear=True)
     def test_command_defaults_satisfy_required_arguments(self):

@@ -136,7 +136,9 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigurationError(f"Invalid TOML in {config_path}: {exc}") from exc
 
-    unknown_top = sorted(set(raw) - {"connection", "selection", "commands"})
+    unknown_top = sorted(
+        set(raw) - {"default_profile", "connections", "connection", "selection", "commands"}
+    )
     if unknown_top:
         raise ConfigurationError(f"Unknown top-level config section(s): {', '.join(unknown_top)}")
 
@@ -148,6 +150,26 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             "[connection].insecure and [connection].ca_bundle are mutually exclusive"
         )
     selection = _validate_section("selection", raw.get("selection", {}), SELECTION_SCHEMA)
+    default_profile = raw.get("default_profile")
+    if default_profile is not None and not _is_string(default_profile):
+        raise ConfigurationError("default_profile must be a non-empty string")
+    raw_connections = raw.get("connections", {})
+    if not isinstance(raw_connections, dict):
+        raise ConfigurationError("Config section [connections] must be a table")
+    connections: dict[str, dict[str, Any]] = {}
+    for name, values in raw_connections.items():
+        if not _is_string(name):
+            raise ConfigurationError("Connection profile names must be non-empty strings")
+        profile = _validate_section(f"connections.{name}", values, CONNECTION_SCHEMA)
+        if profile.get("insecure") and profile.get("ca_bundle"):
+            raise ConfigurationError(
+                f"[connections.{name}].insecure and ca_bundle are mutually exclusive"
+            )
+        connections[name] = profile
+    if default_profile is not None and default_profile not in connections:
+        raise ConfigurationError(
+            f"default_profile references unknown connection profile {default_profile!r}"
+        )
     raw_commands = raw.get("commands", {})
     if not isinstance(raw_commands, dict):
         raise ConfigurationError("Config section [commands] must be a table")
@@ -163,6 +185,9 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     base_directory = config_path.parent
     if "ca_bundle" in connection:
         connection["ca_bundle"] = _resolve_path(connection["ca_bundle"], base_directory)
+    for profile in connections.values():
+        if "ca_bundle" in profile:
+            profile["ca_bundle"] = _resolve_path(profile["ca_bundle"], base_directory)
     if "file" in selection:
         selection["file"] = _resolve_path(selection["file"], base_directory)
     for values in commands.values():
@@ -171,6 +196,8 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
 
     return {
         "path": str(config_path),
+        "default_profile": default_profile,
+        "connections": connections,
         "connection": connection,
         "selection": selection,
         "commands": commands,
@@ -184,3 +211,17 @@ def command_defaults(config: dict[str, Any], command: str) -> dict[str, Any]:
         **config.get("selection", {}),
         **config.get("commands", {}).get(command, {}),
     }
+
+
+def connection_defaults(
+    config: dict[str, Any], profile: str | None = None
+) -> tuple[str | None, dict[str, Any]]:
+    """Return the selected named profile or the legacy connection table."""
+
+    selected = profile or config.get("default_profile")
+    if selected:
+        connections = config.get("connections", {})
+        if selected not in connections:
+            raise ConfigurationError(f"Unknown connection profile: {selected}")
+        return str(selected), dict(connections[selected])
+    return None, dict(config.get("connection", {}))

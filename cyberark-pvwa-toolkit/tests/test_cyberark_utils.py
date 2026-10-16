@@ -219,6 +219,15 @@ class UtilityTests(unittest.TestCase):
             "https://vault.example/PasswordVault/api/Accounts/account%2Fid/Reconcile/",
         )
 
+    def test_retrieve_password_returns_secret_without_logging_it(self):
+        session = FakeSession([FakeResponse(payload={"Content": "secret-value"})])
+        client = CyberArkClient("https://vault.example/PasswordVault", session=session)
+        self.assertEqual(client.retrieve_password("account/id"), "secret-value")
+        self.assertEqual(
+            session.calls[0][1],
+            "https://vault.example/PasswordVault/api/Accounts/account%2Fid/Password/Retrieve/",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

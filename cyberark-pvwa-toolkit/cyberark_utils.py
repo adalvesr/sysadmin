@@ -393,6 +393,30 @@ class CyberArkClient:
             json={"NewCredentials": new_password},
         )
 
+    def retrieve_password(self, account_id: str, *, reason: str = "") -> str:
+        """Retrieve an account password without writing it to output or logs."""
+
+        account_path = quote(str(account_id), safe="")
+        body = {"reason": reason} if reason else {}
+        response = self._request(
+            "POST",
+            f"api/Accounts/{account_path}/Password/Retrieve/",
+            json=body,
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = response.text.strip().strip('"')
+        if isinstance(payload, dict):
+            password = payload.get("Content") or payload.get("content")
+        else:
+            password = payload
+        if not isinstance(password, str) or not password:
+            raise CyberArkAPIError(
+                f"Password retrieval for account {account_id} returned no secret"
+            )
+        return password
+
     def reconcile(self, account_id: str) -> None:
         account_path = quote(str(account_id), safe="")
         self._request(
