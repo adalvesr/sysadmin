@@ -34,6 +34,12 @@ tasks:
           regex: "^Linux-"
         - field: address
           regex: "^host"
+      exclude:
+        accounts: [svc_reconcile]
+        where:
+          - field: safe
+            regex: "^Retired-"
+        discovery-platform-types: [Windows Discovery]
     actions:
       - change-platform:
           platform: UnixSSHKeys
@@ -62,6 +68,21 @@ tasks:
                     for rule in result.tasks[0].selector.match_any_groups[0]
                 ],
                 [("safe", "^Linux-"), ("address", "^host")],
+            )
+            self.assertEqual(
+                result.tasks[0].selector.excluded_accounts,
+                ["svc_reconcile"],
+            )
+            self.assertEqual(
+                [
+                    (rule.field, rule.pattern)
+                    for rule in result.tasks[0].selector.excluded_matches
+                ],
+                [("safe", "^Retired-")],
+            )
+            self.assertEqual(
+                result.tasks[0].selector.excluded_activity_equals,
+                {"DiscoveryPlatformType": ["Windows Discovery"]},
             )
             self.assertEqual(
                 [action.name for action in result.tasks[0].actions],

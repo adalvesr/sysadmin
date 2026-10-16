@@ -91,6 +91,36 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(selector.resolve(spec), [ACCOUNTS[0]])
         self.assertEqual(client.activity_calls, 1)
 
+    def test_any_exclusion_removes_an_account(self):
+        selector = AccountSelector(FakeClient())
+        spec = SelectorSpec(
+            excluded_accounts=["root"],
+            excluded_matches=[MatchRule("platform", "Keys$")],
+        )
+        self.assertEqual(selector.resolve(spec), [])
+
+    def test_playbook_and_runtime_exclusions_are_unioned(self):
+        playbook = SelectorSpec(excluded_accounts=["root"])
+        runtime = SelectorSpec(excluded_safes=["Linux-Prod"])
+        merged = playbook.merged_with(runtime)
+        self.assertEqual(merged.excluded_accounts, ["root"])
+        self.assertEqual(merged.excluded_safes, ["Linux-Prod"])
+
+    def test_activity_exclusions_are_or_conditions_and_are_cached(self):
+        client = FakeClient()
+        selector = AccountSelector(client)
+        spec = SelectorSpec(
+            excluded_activity_equals={
+                "DiscoveryPlatformType": ["Unix SSH Key"]
+            },
+            excluded_activity_matches={
+                "DiscoveryPlatformType": ["via SSH$"]
+            },
+        )
+        self.assertEqual(selector.resolve(spec), [])
+        self.assertEqual(selector.resolve(spec), [])
+        self.assertEqual(client.activity_calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

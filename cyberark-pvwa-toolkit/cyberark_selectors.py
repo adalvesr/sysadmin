@@ -41,6 +41,14 @@ class SelectorSpec:
     match_any_groups: list[list[MatchRule]] = field(default_factory=list)
     activity_equals: dict[str, list[str]] = field(default_factory=dict)
     activity_matches: dict[str, list[str]] = field(default_factory=dict)
+    excluded_addresses: list[str] = field(default_factory=list)
+    excluded_accounts: list[str] = field(default_factory=list)
+    excluded_platforms: list[str] = field(default_factory=list)
+    excluded_safes: list[str] = field(default_factory=list)
+    excluded_ids: list[str] = field(default_factory=list)
+    excluded_matches: list[MatchRule] = field(default_factory=list)
+    excluded_activity_equals: dict[str, list[str]] = field(default_factory=dict)
+    excluded_activity_matches: dict[str, list[str]] = field(default_factory=dict)
     include_domain_users: bool | None = None
     activities_limit: int | None = None
     all_accounts: bool = False
@@ -96,6 +104,26 @@ class SelectorSpec:
             activity_equals=activity_equals,
             activity_matches=_merge_mapping_patterns(
                 self.activity_matches, runtime.activity_matches
+            ),
+            excluded_addresses=_deduplicate(
+                [*self.excluded_addresses, *runtime.excluded_addresses]
+            ),
+            excluded_accounts=_deduplicate(
+                [*self.excluded_accounts, *runtime.excluded_accounts]
+            ),
+            excluded_platforms=_deduplicate(
+                [*self.excluded_platforms, *runtime.excluded_platforms]
+            ),
+            excluded_safes=_deduplicate(
+                [*self.excluded_safes, *runtime.excluded_safes]
+            ),
+            excluded_ids=_deduplicate([*self.excluded_ids, *runtime.excluded_ids]),
+            excluded_matches=[*self.excluded_matches, *runtime.excluded_matches],
+            excluded_activity_equals=_merge_mapping_unions(
+                self.excluded_activity_equals, runtime.excluded_activity_equals
+            ),
+            excluded_activity_matches=_merge_mapping_patterns(
+                self.excluded_activity_matches, runtime.excluded_activity_matches
             ),
             include_domain_users=include_domain_users,
             activities_limit=runtime.activities_limit or self.activities_limit,
@@ -170,6 +198,17 @@ def _merge_mapping_patterns(
 ) -> dict[str, list[str]]:
     return {
         category: [*playbook.get(category, []), *runtime.get(category, [])]
+        for category in {*playbook, *runtime}
+    }
+
+
+def _merge_mapping_unions(
+    playbook: Mapping[str, list[str]], runtime: Mapping[str, list[str]]
+) -> dict[str, list[str]]:
+    return {
+        category: _deduplicate(
+            [*playbook.get(category, []), *runtime.get(category, [])]
+        )
         for category in {*playbook, *runtime}
     }
 
@@ -256,10 +295,31 @@ class AccountSelector:
             for group in spec.match_any_groups
         ):
             return False
+        excluded_exact = {
+            "address": spec.excluded_addresses,
+            "userName": spec.excluded_accounts,
+            "platformId": spec.excluded_platforms,
+            "safeName": spec.excluded_safes,
+            "id": spec.excluded_ids,
+        }
+        for field_name, excluded_values in excluded_exact.items():
+            if excluded_values and str(account.get(field_name) or "").casefold() in {
+                value.casefold() for value in excluded_values
+            }:
+                return False
+        if any(_rule_matches(account, rule) for rule in spec.excluded_matches):
+            return False
         return self._activities_match(account, spec)
 
     def _activities_match(self, account: Mapping[str, Any], spec: SelectorSpec) -> bool:
-        if not spec.activity_equals and not spec.activity_matches:
+        if not any(
+            (
+                spec.activity_equals,
+                spec.activity_matches,
+                spec.excluded_activity_equals,
+                spec.excluded_activity_matches,
+            )
+        ):
             return True
         account_id = str(account.get("id") or "")
         if account_id not in self._activities:
@@ -277,5 +337,17 @@ class AccountSelector:
         for category, patterns in spec.activity_matches.items():
             actual = categories.get(category)
             if actual is None or not all(_compile(pattern).search(actual) for pattern in patterns):
+                return False
+        for category, excluded in spec.excluded_activity_equals.items():
+            actual = categories.get(category)
+            if actual is not None and actual.casefold() in {
+                value.casefold() for value in excluded
+            }:
+                return False
+        for category, patterns in spec.excluded_activity_matches.items():
+            actual = categories.get(category)
+            if actual is not None and any(
+                _compile(pattern).search(actual) for pattern in patterns
+            ):
                 return False
         return True

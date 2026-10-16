@@ -21,6 +21,13 @@ tasks:
         - field: user
           regex: "^(root|oracle)$"
 
+      exclude:
+        accounts:
+          - svc_reconcile
+        where:
+          - field: safe
+            regex: "^Retired-"
+
     actions:
       - list:
           fields:

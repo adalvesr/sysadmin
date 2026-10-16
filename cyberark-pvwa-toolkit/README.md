@@ -115,6 +115,22 @@ pvwa-toolkit accounts -f hosts.txt \
   --where-any user '^svc_' --where-any address '^db' list
 ```
 
+Prefix a selector with `--no-` to exclude matching accounts. Exclusions form
+one OR group: an account is removed when it matches any exact, regex, or
+activity exclusion. They are applied after the positive selectors:
+
+```bash
+pvwa-toolkit accounts -f hosts.txt \
+  --no-account svc_reconcile \
+  --no-platform RetiredPlatform \
+  --no-where safe '^Retired-' \
+  list
+```
+
+Address exclusions accept both values and files through `--no-address` and
+`--no-file`. Activity exclusions use `--no-activity`, `--no-activity-match`,
+`--no-dpt`, or `--no-dpt-match`.
+
 Activity file categories are selectors. `--dpt` is an alias for the commonly
 used `DiscoveryPlatformType` category:
 
@@ -162,6 +178,7 @@ changes any account and requires exactly one match on each address:
 
 ```bash
 pvwa-toolkit accounts -f hosts.txt \
+  --no-account svc_reconcile \
   link-account \
   --role reconcile \
   --source-account svc_reconcile \
@@ -190,6 +207,12 @@ tasks:
       where:
         - field: user
           regex: "^(root|oracle)$"
+      exclude:
+        accounts:
+          - svc_reconcile
+        where:
+          - field: safe
+            regex: "^Retired-"
     actions:
       - link-account:
           role: reconcile
@@ -212,6 +235,10 @@ category present only in the playbook is retained. When both provide the same
 category, their values are intersected. Playbooks can declare required
 categories such as `addresses`; validation occurs before any account mutation.
 Each task resolves and freezes its account IDs before its ordered actions run.
+Exclusions from the playbook and command line are unioned. They do not satisfy
+required selectors or the finite-scope requirement for mutations. Action source
+accounts are resolved separately, so excluding `svc_reconcile` from the target
+set does not prevent `link-account` from finding it as a source.
 
 The process exits with `0` on success, `1` for configuration or session errors,
 and `2` when one or more per-account operations fail.

@@ -117,6 +117,80 @@ def add_selector_arguments(parser: argparse.ArgumentParser) -> None:
         help="explicitly allow an unbounded account scope",
     )
 
+    exclusions = parser.add_argument_group("account exclusions")
+    _append_argument(
+        exclusions,
+        "--no-hostname",
+        "--no-address",
+        dest="excluded_hostnames",
+        help="exclude an exact account address; repeatable",
+    )
+    _append_argument(
+        exclusions,
+        "--no-file",
+        "--no-address-file",
+        dest="excluded_files",
+        help="exclude addresses from a file; repeatable",
+    )
+    _append_argument(
+        exclusions,
+        "--no-account",
+        dest="excluded_accounts",
+        help="exclude an exact account username; repeatable",
+    )
+    _append_argument(
+        exclusions,
+        "--no-platform",
+        dest="excluded_platforms",
+        help="exclude an exact platform ID; repeatable",
+    )
+    _append_argument(
+        exclusions,
+        "--no-safe",
+        dest="excluded_safes",
+        help="exclude an exact safe name; repeatable",
+    )
+    _append_argument(
+        exclusions,
+        "--no-id",
+        dest="excluded_ids",
+        help="exclude an exact account ID; repeatable",
+    )
+    exclusions.add_argument(
+        "--no-where",
+        nargs=2,
+        action="append",
+        metavar=("FIELD", "REGEX"),
+        help="exclude accounts matching this field/regex condition; repeatable",
+    )
+    exclusions.add_argument(
+        "--no-activity",
+        nargs=2,
+        action="append",
+        metavar=("CATEGORY", "VALUE"),
+        help="exclude an exact activity file-category value; repeatable",
+    )
+    exclusions.add_argument(
+        "--no-activity-match",
+        nargs=2,
+        action="append",
+        metavar=("CATEGORY", "REGEX"),
+        help="exclude an activity file-category regex; repeatable",
+    )
+    _append_argument(
+        exclusions,
+        "--no-dpt",
+        "--no-discovery-platform-type",
+        dest="excluded_dpt",
+        help="alias for --no-activity DiscoveryPlatformType VALUE",
+    )
+    _append_argument(
+        exclusions,
+        "--no-dpt-match",
+        dest="excluded_dpt_matches",
+        help="regex exclusion alias for DiscoveryPlatformType",
+    )
+
 
 def _add_execute(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
@@ -250,6 +324,26 @@ def selector_from_args(args: argparse.Namespace) -> SelectorSpec:
             args.selector_dpt_matches
         )
 
+    excluded_matches: list[MatchRule] = []
+    for field_name, pattern in args.no_where or []:
+        if field_name not in FIELD_MAP:
+            raise ConfigurationError(f"Unsupported filter field: {field_name}")
+        excluded_matches.append(MatchRule(field_name, pattern))
+    excluded_activity_equals: dict[str, list[str]] = {}
+    for category, value in args.no_activity or []:
+        excluded_activity_equals.setdefault(category, []).append(value)
+    if args.excluded_dpt:
+        excluded_activity_equals.setdefault("DiscoveryPlatformType", []).extend(
+            args.excluded_dpt
+        )
+    excluded_activity_matches: dict[str, list[str]] = {}
+    for category, pattern in args.no_activity_match or []:
+        excluded_activity_matches.setdefault(category, []).append(pattern)
+    if args.excluded_dpt_matches:
+        excluded_activity_matches.setdefault("DiscoveryPlatformType", []).extend(
+            args.excluded_dpt_matches
+        )
+
     return SelectorSpec(
         addresses=addresses_from_sources(args.selector_hostnames, args.selector_files),
         accounts=list(args.selector_accounts or []),
@@ -260,6 +354,16 @@ def selector_from_args(args: argparse.Namespace) -> SelectorSpec:
         match_any_groups=match_any_groups,
         activity_equals=activity_equals,
         activity_matches=activity_matches,
+        excluded_addresses=addresses_from_sources(
+            args.excluded_hostnames, args.excluded_files
+        ),
+        excluded_accounts=list(args.excluded_accounts or []),
+        excluded_platforms=list(args.excluded_platforms or []),
+        excluded_safes=list(args.excluded_safes or []),
+        excluded_ids=list(args.excluded_ids or []),
+        excluded_matches=excluded_matches,
+        excluded_activity_equals=excluded_activity_equals,
+        excluded_activity_matches=excluded_activity_matches,
         include_domain_users=args.include_domain_users,
         activities_limit=args.activities_limit,
         all_accounts=args.all_accounts,

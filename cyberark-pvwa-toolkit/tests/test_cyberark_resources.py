@@ -46,6 +46,42 @@ class ResourceCliTests(unittest.TestCase):
             )
             self.assertEqual(selector_from_args(args).addresses, ["host01", "host02"])
 
+    def test_cli_exclusions_are_normalized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "excluded-hosts.txt"
+            path.write_text("HOST02\nhost03\n", encoding="utf-8")
+            args = build_parser().parse_args(
+                [
+                    "accounts",
+                    "--no-address",
+                    "host02",
+                    "--no-file",
+                    str(path),
+                    "--no-account",
+                    "svc_reconcile",
+                    "--no-platform",
+                    "Retired",
+                    "--no-where",
+                    "safe",
+                    "^Retired-",
+                    "--no-dpt",
+                    "Windows Discovery",
+                    "list",
+                ]
+            )
+            selector = selector_from_args(args)
+            self.assertEqual(selector.excluded_addresses, ["host02", "host03"])
+            self.assertEqual(selector.excluded_accounts, ["svc_reconcile"])
+            self.assertEqual(selector.excluded_platforms, ["Retired"])
+            self.assertEqual(
+                [(rule.field, rule.pattern) for rule in selector.excluded_matches],
+                [("safe", "^Retired-")],
+            )
+            self.assertEqual(
+                selector.excluded_activity_equals,
+                {"DiscoveryPlatformType": ["Windows Discovery"]},
+            )
+
     def test_password_mode_is_explicit(self):
         args = build_parser().parse_args(
             [

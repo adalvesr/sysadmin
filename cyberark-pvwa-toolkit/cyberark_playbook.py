@@ -117,6 +117,46 @@ def _match_rules(value: Any, context: str) -> list[MatchRule]:
     return rules
 
 
+def _addresses(
+    value: Any, *, context: str, base_directory: Path
+) -> list[str]:
+    if isinstance(value, list):
+        address_values = _strings(value, context)
+        address_files: list[str] = []
+    else:
+        address_mapping = _mapping(value, context)
+        _reject_unknown(address_mapping, {"values", "files"}, context)
+        address_values = _strings(address_mapping.get("values"), f"{context}.values")
+        address_files = _strings(address_mapping.get("files"), f"{context}.files")
+    return addresses_from_sources(
+        address_values, address_files, base_directory=base_directory
+    )
+
+
+def _activities(
+    value: Any, *, context: str
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    equals: dict[str, list[str]] = {}
+    matches: dict[str, list[str]] = {}
+    for category, constraint in _mapping(value, context).items():
+        if not isinstance(category, str) or not category:
+            raise ConfigurationError("Activity category names must be non-empty strings")
+        if isinstance(constraint, list):
+            equals[category] = _strings(constraint, f"{context}.{category}")
+            continue
+        options = _mapping(constraint, f"{context}.{category}")
+        _reject_unknown(options, {"equals", "matches"}, f"{context}.{category}")
+        if "equals" in options:
+            equals[category] = _strings(
+                options["equals"], f"{context}.{category}.equals"
+            )
+        if "matches" in options:
+            matches[category] = _strings(
+                options["matches"], f"{context}.{category}.matches"
+            )
+    return equals, matches
+
+
 def selector_from_mapping(value: Any, *, base_directory: Path) -> SelectorSpec:
     raw = _mapping(value, "task.select")
     allowed = {
@@ -132,49 +172,13 @@ def selector_from_mapping(value: Any, *, base_directory: Path) -> SelectorSpec:
         "include-domain-users",
         "activities-limit",
         "all-accounts",
+        "exclude",
     }
     _reject_unknown(raw, allowed, "task.select")
 
-    address_data = raw.get("addresses", {})
-    if isinstance(address_data, list):
-        address_values = _strings(address_data, "task.select.addresses")
-        address_files: list[str] = []
-    else:
-        address_mapping = _mapping(address_data, "task.select.addresses")
-        _reject_unknown(
-            address_mapping, {"values", "files"}, "task.select.addresses"
-        )
-        address_values = _strings(
-            address_mapping.get("values"), "task.select.addresses.values"
-        )
-        address_files = _strings(
-            address_mapping.get("files"), "task.select.addresses.files"
-        )
-
-    activity_equals: dict[str, list[str]] = {}
-    activity_matches: dict[str, list[str]] = {}
-    for category, constraint in _mapping(
-        raw.get("activities"), "task.select.activities"
-    ).items():
-        if not isinstance(category, str) or not category:
-            raise ConfigurationError("Activity category names must be non-empty strings")
-        if isinstance(constraint, list):
-            activity_equals[category] = _strings(
-                constraint, f"task.select.activities.{category}"
-            )
-            continue
-        options = _mapping(constraint, f"task.select.activities.{category}")
-        _reject_unknown(
-            options, {"equals", "matches"}, f"task.select.activities.{category}"
-        )
-        if "equals" in options:
-            activity_equals[category] = _strings(
-                options["equals"], f"task.select.activities.{category}.equals"
-            )
-        if "matches" in options:
-            activity_matches[category] = _strings(
-                options["matches"], f"task.select.activities.{category}.matches"
-            )
+    activity_equals, activity_matches = _activities(
+        raw.get("activities"), context="task.select.activities"
+    )
 
     discovery_types = _strings(
         raw.get("discovery-platform-types"),
@@ -186,6 +190,33 @@ def selector_from_mapping(value: Any, *, base_directory: Path) -> SelectorSpec:
 
     all_rules = _match_rules(raw.get("where"), "task.select.where")
     any_rules = _match_rules(raw.get("where-any"), "task.select.where-any")
+
+    exclude = _mapping(raw.get("exclude"), "task.select.exclude")
+    _reject_unknown(
+        exclude,
+        {
+            "addresses",
+            "accounts",
+            "platforms",
+            "safes",
+            "ids",
+            "where",
+            "activities",
+            "discovery-platform-types",
+        },
+        "task.select.exclude",
+    )
+    excluded_activity_equals, excluded_activity_matches = _activities(
+        exclude.get("activities"), context="task.select.exclude.activities"
+    )
+    excluded_discovery_types = _strings(
+        exclude.get("discovery-platform-types"),
+        "task.select.exclude.discovery-platform-types",
+    )
+    if excluded_discovery_types:
+        excluded_activity_equals.setdefault("DiscoveryPlatformType", []).extend(
+            excluded_discovery_types
+        )
 
     include_domain_users = raw.get("include-domain-users")
     if include_domain_users is not None and not isinstance(include_domain_users, bool):
@@ -202,8 +233,10 @@ def selector_from_mapping(value: Any, *, base_directory: Path) -> SelectorSpec:
         raise ConfigurationError("task.select.all-accounts must be a boolean")
 
     return SelectorSpec(
-        addresses=addresses_from_sources(
-            address_values, address_files, base_directory=base_directory
+        addresses=_addresses(
+            raw.get("addresses"),
+            context="task.select.addresses",
+            base_directory=base_directory,
         ),
         accounts=_strings(raw.get("accounts"), "task.select.accounts"),
         platforms=_strings(raw.get("platforms"), "task.select.platforms"),
@@ -213,6 +246,26 @@ def selector_from_mapping(value: Any, *, base_directory: Path) -> SelectorSpec:
         match_any_groups=[any_rules] if any_rules else [],
         activity_equals=activity_equals,
         activity_matches=activity_matches,
+        excluded_addresses=_addresses(
+            exclude.get("addresses"),
+            context="task.select.exclude.addresses",
+            base_directory=base_directory,
+        ),
+        excluded_accounts=_strings(
+            exclude.get("accounts"), "task.select.exclude.accounts"
+        ),
+        excluded_platforms=_strings(
+            exclude.get("platforms"), "task.select.exclude.platforms"
+        ),
+        excluded_safes=_strings(
+            exclude.get("safes"), "task.select.exclude.safes"
+        ),
+        excluded_ids=_strings(exclude.get("ids"), "task.select.exclude.ids"),
+        excluded_matches=_match_rules(
+            exclude.get("where"), "task.select.exclude.where"
+        ),
+        excluded_activity_equals=excluded_activity_equals,
+        excluded_activity_matches=excluded_activity_matches,
         include_domain_users=include_domain_users,
         activities_limit=activities_limit,
         all_accounts=all_accounts,

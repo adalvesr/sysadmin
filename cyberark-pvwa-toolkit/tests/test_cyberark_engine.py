@@ -168,7 +168,10 @@ class EngineTests(unittest.TestCase):
         )
         task = self.task(
             action,
-            SelectorSpec(addresses=["host01", "host02"]),
+            SelectorSpec(
+                addresses=["host01", "host02"],
+                excluded_accounts=["svc_reconcile"],
+            ),
         )
 
         self.assertEqual(ExecutionEngine(client).run_tasks([task], execute=True), 0)
