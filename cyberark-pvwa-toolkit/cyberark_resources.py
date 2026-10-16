@@ -1,4 +1,4 @@
-"""Resource-oriented CLI for account actions and playbook execution."""
+"""Resource-oriented CLI definitions for account actions and playbooks."""
 
 from __future__ import annotations
 
@@ -77,21 +77,6 @@ def add_selector_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         metavar=("FIELD", "REGEX"),
         help="ORed field/regex condition; repeatable",
-    )
-    _append_argument(
-        selectors,
-        "-F",
-        "--field",
-        dest="legacy_fields",
-        choices=tuple(FIELD_MAP),
-        help="compatibility field paired with -m/--match",
-    )
-    _append_argument(
-        selectors,
-        "-m",
-        "--match",
-        dest="legacy_matches",
-        help="compatibility regex paired with -F/--field",
     )
     selectors.add_argument(
         "--activity",
@@ -229,26 +214,9 @@ def add_resource_parsers(commands: argparse._SubParsersAction[Any]) -> None:
     playbook.set_defaults(handler=command_playbook)
 
 
-def _legacy_rules(args: argparse.Namespace) -> tuple[list[MatchRule], list[list[MatchRule]]]:
-    fields = list(args.legacy_fields or [])
-    patterns = list(args.legacy_matches or [])
-    if not patterns:
-        return [], []
-    if not fields:
-        fields = ["user"]
-    if len(fields) == len(patterns):
-        return [MatchRule(field, pattern) for field, pattern in zip(fields, patterns)], []
-    if len(patterns) == 1:
-        return [], [[MatchRule(field, patterns[0]) for field in fields]]
-    if len(fields) == 1:
-        return [MatchRule(fields[0], pattern) for pattern in patterns], []
-    raise ConfigurationError(
-        "Repeat --field and --match equally, or provide one field or one match"
-    )
-
-
 def selector_from_args(args: argparse.Namespace) -> SelectorSpec:
-    matches_all, match_any_groups = _legacy_rules(args)
+    matches_all: list[MatchRule] = []
+    match_any_groups: list[list[MatchRule]] = []
     for field_name, pattern in args.where or []:
         if field_name not in FIELD_MAP:
             raise ConfigurationError(f"Unsupported filter field: {field_name}")
@@ -352,7 +320,7 @@ def command_playbook(client: CyberArkClient, args: argparse.Namespace) -> int:
 
 
 def preload_playbook(args: argparse.Namespace) -> Any:
-    if getattr(args, "command", None) != "playbook":
+    if getattr(args, "resource", None) != "playbook":
         return None
     if getattr(args, "playbook_action", None) != "run":
         return None

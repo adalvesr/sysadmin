@@ -12,34 +12,7 @@ timeout = 45
 # ca_bundle = "certificates/company-ca.pem"
 # insecure = false
 
-[selection]
-platforms = ["UnixSSH", "UnixSSHKeys"]
-file = "hosts.txt"
-include_domain_users = false
-field = "user"
-# Repeat fields and matches to create ANDed filter pairs.
-# field = ["user", "safe"]
-# match = ["^svc_", "^Linux-Prod$"]
-
-[commands.list]
-activity_category = "DiscoveryPlatformType"
-activities_limit = 200
-
-[commands.update-password]
-account_user = "reconcile_svc"
-new_password_env = "CYBERARK_NEW_PASSWORD"
-
-[commands.set-ssh-key-policy]
-target_platform = "UnixSSHKeys"
-activity_category = "DiscoveryPlatformType"
-activity_value = "Unix SSH Key"
-reason = "SSH key management is disabled"
-
-[commands.link-reconcile]
-reconcile_user = "reconcile_svc"
-index = 3
-default_folder = "Root"
-
-[commands.rotate-reconcile]
-exclude_users = ["reconcile_svc"]
-length = 30
+[connections.development]
+url = "https://vault-dev.example/PasswordVault"
+auth_type = "LDAP"
+timeout = 45

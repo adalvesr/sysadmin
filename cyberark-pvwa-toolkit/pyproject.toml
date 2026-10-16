@@ -27,7 +27,7 @@ py-modules = [
     "cyberark_playbook",
     "cyberark_selectors",
     "cyberark_utils",
-    "cyberark_v2_cli",
+    "cyberark_resources",
 ]
 
 [tool.ruff]

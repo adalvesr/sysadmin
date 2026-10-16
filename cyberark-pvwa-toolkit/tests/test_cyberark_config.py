@@ -5,86 +5,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cyberark_cli import build_parser, platforms_from_args
+from cyberark_cli import build_parser
 from cyberark_config import connection_defaults, load_config
 from cyberark_utils import ConfigurationError
 
 
 class ConfigTests(unittest.TestCase):
-    def write_config(self, directory: str, content: str) -> Path:
-        path = Path(directory) / "cyberark.toml"
+    @staticmethod
+    def write_config(directory: str, content: str) -> Path:
+        path = Path(directory) / "config.toml"
         path.write_text(content, encoding="utf-8")
         return path
 
-    def test_loads_config_and_resolves_relative_paths(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = self.write_config(
-                directory,
-                """
-[connection]
-url = "https://vault.example/PasswordVault"
-ca_bundle = "certs/ca.pem"
-
-[selection]
-file = "hosts.txt"
-platforms = ["UnixSSH"]
-field = ["user", "safe"]
-match = ["^svc_", "^Linux-Prod$"]
-""",
-            )
-            config = load_config(path)
-            self.assertEqual(config["path"], str(path.resolve()))
-            self.assertEqual(
-                config["connection"]["ca_bundle"],
-                str((Path(directory) / "certs" / "ca.pem").resolve()),
-            )
-            self.assertEqual(
-                config["selection"]["file"],
-                str((Path(directory) / "hosts.txt").resolve()),
-            )
-            self.assertEqual(config["selection"]["field"], ["user", "safe"])
-            self.assertEqual(
-                config["selection"]["match"], ["^svc_", "^Linux-Prod$"]
-            )
-
-    def test_rejects_unknown_and_secret_options(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = self.write_config(
-                directory,
-                """
-[connection]
-password = "must-not-be-stored"
-""",
-            )
-            with self.assertRaisesRegex(ConfigurationError, "Unknown option"):
-                load_config(path)
-
-    def test_rejects_execute_in_command_config(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = self.write_config(
-                directory,
-                """
-[commands.rotate-reconcile]
-execute = true
-""",
-            )
-            with self.assertRaisesRegex(ConfigurationError, "execute"):
-                load_config(path)
-
-    def test_rejects_conflicting_tls_settings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = self.write_config(
-                directory,
-                """
-[connection]
-insecure = true
-ca_bundle = "ca.pem"
-""",
-            )
-            with self.assertRaisesRegex(ConfigurationError, "mutually exclusive"):
-                load_config(path)
-
-    def test_loads_named_connection_profiles(self):
+    def test_loads_named_profiles_and_resolves_relative_ca_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             path = self.write_config(
                 directory,
@@ -94,6 +27,7 @@ default_profile = "production"
 [connections.production]
 url = "https://production.example/PasswordVault"
 auth_type = "LDAP"
+ca_bundle = "certs/ca.pem"
 
 [connections.development]
 url = "https://development.example/PasswordVault"
@@ -102,66 +36,100 @@ url = "https://development.example/PasswordVault"
             config = load_config(path)
             name, connection = connection_defaults(config)
             self.assertEqual(name, "production")
-            self.assertEqual(connection["auth_type"], "LDAP")
+            self.assertEqual(
+                connection["ca_bundle"],
+                str((Path(directory) / "certs" / "ca.pem").resolve()),
+            )
             name, connection = connection_defaults(config, "development")
             self.assertEqual(name, "development")
             self.assertEqual(
                 connection["url"], "https://development.example/PasswordVault"
             )
 
-    @patch.dict("os.environ", {}, clear=True)
-    def test_command_defaults_satisfy_required_arguments(self):
-        config = {
-            "selection": {"platforms": ["ConfiguredPlatform"]},
-            "commands": {"update-password": {"account_user": "configured_svc"}},
-        }
-        args = build_parser(config).parse_args(["update-password", "--hostname", "host01"])
-        self.assertEqual(args.account_user, "configured_svc")
-        self.assertEqual(platforms_from_args(args, mutation=True), ["ConfiguredPlatform"])
+    def test_rejects_removed_config_sections(self):
+        for section in ("connection", "selection", "commands.list"):
+            with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
+                path = self.write_config(directory, f"[{section}]\nurl = 'unused'\n")
+                with self.assertRaisesRegex(ConfigurationError, "Unknown top-level"):
+                    load_config(path)
+
+    def test_rejects_plaintext_password_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_config(
+                directory,
+                """
+[connections.production]
+url = "https://production.example/PasswordVault"
+password = "must-not-be-stored"
+""",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "Unknown option"):
+                load_config(path)
+
+    def test_rejects_conflicting_tls_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_config(
+                directory,
+                """
+[connections.production]
+insecure = true
+ca_bundle = "ca.pem"
+""",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "mutually exclusive"):
+                load_config(path)
+
+    def test_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ConfigurationError, "Unknown connection profile"):
+            connection_defaults({"connections": {}}, "missing")
 
     @patch.dict(
         "os.environ",
-        {
-            "CYBERARK_PVWA_URL": "https://environment.example/PasswordVault",
-            "CYBERARK_PLATFORMS": "EnvironmentPlatform",
-        },
+        {"CYBERARK_PVWA_URL": "https://environment.example/PasswordVault"},
         clear=True,
     )
-    def test_environment_overrides_file_and_cli_overrides_environment(self):
+    def test_environment_overrides_profile_and_cli_overrides_environment(self):
         config = {
-            "connection": {"url": "https://config.example/PasswordVault"},
-            "selection": {"platforms": ["ConfiguredPlatform"]},
+            "default_profile": "production",
+            "connections": {
+                "production": {"url": "https://config.example/PasswordVault"}
+            },
         }
         parser = build_parser(config)
-        from_environment = parser.parse_args(["list", "--hostname", "host01"])
+        from_environment = parser.parse_args(["accounts", "-H", "host01", "list"])
         self.assertEqual(from_environment.url, "https://environment.example/PasswordVault")
-        self.assertEqual(from_environment.platform, ["EnvironmentPlatform"])
 
         from_cli = parser.parse_args(
             [
                 "--url",
                 "https://cli.example/PasswordVault",
-                "list",
-                "--hostname",
+                "accounts",
+                "-H",
                 "host01",
-                "--platform",
-                "CliPlatform",
+                "list",
             ]
         )
         self.assertEqual(from_cli.url, "https://cli.example/PasswordVault")
-        self.assertEqual(from_cli.platform, ["CliPlatform"])
 
     @patch.dict("os.environ", {}, clear=True)
-    def test_cli_tls_option_overrides_configured_tls_mode(self):
-        insecure_parser = build_parser({"connection": {"insecure": True}})
-        args = insecure_parser.parse_args(
-            ["--ca-bundle", "cli-ca.pem", "list", "--hostname", "host01"]
+    def test_cli_tls_option_overrides_profile_tls_mode(self):
+        insecure_config = {
+            "default_profile": "production",
+            "connections": {"production": {"insecure": True}},
+        }
+        args = build_parser(insecure_config).parse_args(
+            ["--ca-bundle", "cli-ca.pem", "accounts", "-H", "host01", "list"]
         )
         self.assertFalse(args.insecure)
         self.assertEqual(args.ca_bundle, "cli-ca.pem")
 
-        ca_parser = build_parser({"connection": {"ca_bundle": "configured-ca.pem"}})
-        args = ca_parser.parse_args(["--insecure", "list", "--hostname", "host01"])
+        ca_config = {
+            "default_profile": "production",
+            "connections": {"production": {"ca_bundle": "configured-ca.pem"}},
+        }
+        args = build_parser(ca_config).parse_args(
+            ["--insecure", "accounts", "-H", "host01", "list"]
+        )
         self.assertTrue(args.insecure)
         self.assertIsNone(args.ca_bundle)
 

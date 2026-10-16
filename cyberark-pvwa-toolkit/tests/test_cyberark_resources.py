@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from cyberark_cli import build_parser, normalize_global_arguments
-from cyberark_v2_cli import selector_from_args
+from cyberark_resources import selector_from_args
 
 
 class ResourceCliTests(unittest.TestCase):

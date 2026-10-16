@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import argparse
+import contextlib
+import io
 import unittest
 from unittest.mock import patch
 
-from cyberark_cli import (
-    build_parser,
-    platforms_from_args,
-    read_secret_from_env_or_prompt,
-    read_username_or_prompt,
-)
+from cyberark_cli import build_parser, read_secret_from_env_or_prompt, read_username_or_prompt
+from cyberark_resources import selector_from_args
 from cyberark_utils import ConfigurationError
 
 
@@ -17,81 +14,40 @@ class CliSafetyTests(unittest.TestCase):
     def setUp(self):
         self.parser = build_parser()
 
-    def parse_update(self, *extra: str) -> argparse.Namespace:
-        return self.parser.parse_args(
-            [
-                "update-password",
-                "--hostname",
-                "host01.example.com",
-                "--account-user",
-                "reconcile_svc",
-                *extra,
-            ]
-        )
-
     def test_mutation_is_preview_by_default(self):
-        self.assertFalse(self.parse_update("--platform", "UnixSSH").execute)
-
-    @patch.dict("os.environ", {}, clear=True)
-    def test_mutation_requires_explicit_platform_scope(self):
-        with self.assertRaises(ConfigurationError):
-            platforms_from_args(self.parse_update(), mutation=True)
-
-    @patch.dict("os.environ", {"CYBERARK_PLATFORMS": "UnixSSH, UnixKeys"}, clear=True)
-    def test_platforms_can_come_from_environment(self):
-        self.assertEqual(
-            platforms_from_args(self.parse_update(), mutation=True),
-            ["UnixSSH", "UnixKeys"],
+        args = self.parser.parse_args(
+            ["accounts", "-H", "host01", "reconcile"]
         )
+        self.assertFalse(args.execute)
 
-    @patch.dict("os.environ", {}, clear=True)
-    def test_all_platforms_is_an_explicit_escape_hatch(self):
-        self.assertEqual(
-            platforms_from_args(self.parse_update("--all-platforms"), mutation=True),
-            [],
-        )
-
-    def test_original_target_and_filter_options_are_supported(self):
+    def test_where_selectors_are_repeatable(self):
         args = self.parser.parse_args(
             [
-                "list",
+                "accounts",
                 "-H",
-                "host01.example.com",
-                "-f",
-                "hosts.txt",
-                "-F",
+                "host01",
+                "--where",
                 "user",
-                "-m",
                 "^svc_",
-            ]
-        )
-        self.assertEqual(args.hostname, "host01.example.com")
-        self.assertEqual(args.file, "hosts.txt")
-        self.assertEqual(args.field, ["user"])
-        self.assertEqual(args.match, ["^svc_"])
-
-    def test_fields_and_matches_are_repeatable(self):
-        args = self.parser.parse_args(
-            [
-                "list",
-                "--hostname",
-                "host01.example.com",
-                "--field",
-                "user",
-                "--match",
-                "^svc_",
-                "--field",
+                "--where",
                 "safe",
-                "--match",
                 "^Linux-Prod$",
+                "list",
             ]
         )
-        self.assertEqual(args.field, ["user", "safe"])
-        self.assertEqual(args.match, ["^svc_", "^Linux-Prod$"])
+        self.assertEqual(args.selector_hostnames, ["host01"])
+        selector = selector_from_args(args)
+        self.assertEqual(
+            [(rule.field, rule.pattern) for rule in selector.matches_all],
+            [("user", "^svc_"), ("safe", "^Linux-Prod$")],
+        )
 
-    def test_password_update_retains_safe_as_default_filter_field(self):
-        args = self.parse_update("--match", "^Linux-Prod$")
-        self.assertEqual(args.field, ["safe"])
+    def test_field_and_match_options_are_not_accepted(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.parser.parse_args(
+                    ["accounts", "-H", "host01", "-F", "user", "list"]
+                )
 
     @patch("builtins.input")
     def test_configured_username_does_not_prompt(self, prompt):
@@ -114,7 +70,7 @@ class CliSafetyTests(unittest.TestCase):
         clear=True,
     )
     def test_conventional_password_environment_variable_is_detected(self):
-        args = build_parser().parse_args(["list", "--hostname", "host01"])
+        args = build_parser().parse_args(["accounts", "-H", "host01", "list"])
         self.assertEqual(args.login_password_env, "CYBERARK_LOGIN_PASSWORD")
 
     @patch.dict("os.environ", {"LOGIN_SECRET": "from-environment"}, clear=True)

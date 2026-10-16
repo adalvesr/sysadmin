@@ -1,21 +1,13 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from cyberark_utils import (
     ConfigurationError,
     CyberArkAPIError,
     CyberArkClient,
-    collect_targets,
     extract_file_categories,
-    filter_accounts,
     normalize_base_url,
-    read_lines_dedup,
-    regex_filter_accounts,
-    regex_filter_accounts_by_rules,
-    split_values,
 )
 
 
@@ -49,31 +41,6 @@ class InvalidJsonResponse(FakeResponse):
         raise ValueError("not JSON")
 
 
-ACCOUNTS = [
-    {
-        "id": "1",
-        "userName": "root",
-        "address": "host01.example.com",
-        "platformId": "UnixSSH",
-        "safeName": "Linux-Prod",
-    },
-    {
-        "id": "2",
-        "userName": "svc@example.com",
-        "address": "HOST01.EXAMPLE.COM",
-        "platformId": "UnixSSH",
-        "safeName": "Linux-Prod",
-    },
-    {
-        "id": "3",
-        "userName": "root",
-        "address": "host02.example.com",
-        "platformId": "Other",
-        "safeName": "Linux-Test",
-    },
-]
-
-
 class UtilityTests(unittest.TestCase):
     def test_normalize_base_url(self):
         self.assertEqual(
@@ -82,71 +49,6 @@ class UtilityTests(unittest.TestCase):
         )
         with self.assertRaises(ConfigurationError):
             normalize_base_url("vault.example")
-
-    def test_read_and_collect_targets(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "hosts.txt"
-            path.write_text("# comment\nhost01\nHOST01\n\nhost02\n", encoding="utf-8")
-            self.assertEqual(read_lines_dedup(path), ["host01", "host02"])
-            self.assertEqual(collect_targets("HOST02", str(path)), ["HOST02", "host01"])
-
-    def test_split_values_is_repeatable_and_case_insensitive(self):
-        self.assertEqual(
-            split_values(["UnixSSH, Other", "unixssh", "Third"]),
-            ["UnixSSH", "Other", "Third"],
-        )
-
-    def test_filter_accounts_applies_address_platform_and_local_user(self):
-        self.assertEqual(
-            filter_accounts(
-                ACCOUNTS,
-                address="HOST01.example.com",
-                platform_ids=["unixssh"],
-                local_only=True,
-            ),
-            [ACCOUNTS[0]],
-        )
-
-    def test_regex_filter_reports_invalid_expression(self):
-        self.assertEqual(regex_filter_accounts(ACCOUNTS, "^Linux-P", "safe"), ACCOUNTS[:2])
-        with self.assertRaises(ConfigurationError):
-            regex_filter_accounts(ACCOUNTS, "[", "user")
-
-    def test_one_match_can_search_multiple_fields(self):
-        self.assertEqual(
-            regex_filter_accounts_by_rules(
-                ACCOUNTS, ["example\\.com$"], ["user", "address"]
-            ),
-            ACCOUNTS,
-        )
-
-    def test_multiple_field_match_pairs_are_anded(self):
-        self.assertEqual(
-            regex_filter_accounts_by_rules(
-                ACCOUNTS,
-                ["^root$", "^Linux-Prod$"],
-                ["user", "safe"],
-            ),
-            [ACCOUNTS[0]],
-        )
-
-    def test_multiple_matches_can_apply_to_one_field(self):
-        self.assertEqual(
-            regex_filter_accounts_by_rules(
-                ACCOUNTS,
-                ["^Linux", "Prod$"],
-                ["safe"],
-            ),
-            ACCOUNTS[:2],
-        )
-
-    def test_ambiguous_filter_counts_are_rejected(self):
-        with self.assertRaisesRegex(ConfigurationError, "Repeat --field and --match"):
-            regex_filter_accounts_by_rules(
-                ACCOUNTS,
-                ["one", "two"],
-                ["user", "safe", "address"],
-            )
 
     def test_extract_file_categories_keeps_newest_value(self):
         activities = [

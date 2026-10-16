@@ -18,7 +18,7 @@ source .venv/bin/activate
 python3 -m pip install --constraint constraints-rhel9.txt .
 ```
 
-`constraints-rhel9.txt` pins the Python 3.9-compatible HTTP dependency set so
+`constraints-rhel9.txt` pins the Python 3.9-compatible dependency set so
 pip does not need to backtrack through releases that have dropped Python 3.9.
 For a development installation, include the pinned linting extra:
 
@@ -50,7 +50,7 @@ Alternatively, select the file once for the current shell:
 
 ```bash
 export CYBERARK_CONFIG=/etc/cyberark-pvwa-toolkit/config.toml
-pvwa-toolkit list
+pvwa-toolkit accounts -f hosts.txt list
 ```
 
 Connection values can also be stored directly in environment variables:
@@ -72,11 +72,11 @@ Configuration files reject unknown options, plaintext password fields, and the
 When credentials are not configured, the CLI prompts for the PVWA username and
 prompts for the password without echo. `CYBERARK_LOGIN_PASSWORD` is detected
 automatically for unattended use. A different secret variable can be selected
-with `--login-password-env` or `[connection].login_password_env`. The
-`--new-password-env` option provides the same indirection for password-update
-operations. Passwords are intentionally not accepted directly as arguments or
-configuration values because process command lines and files are often logged
-or broadly readable.
+with `--login-password-env` or `login_password_env` in a named connection
+profile. The `set-password --password-env NAME` option provides the same
+indirection for a Vault password. Passwords are intentionally not accepted
+directly as arguments or configuration values because process command lines
+and files are often logged or broadly readable.
 
 ## Account commands
 
@@ -99,11 +99,20 @@ pvwa-toolkit accounts \
 ```
 
 Use `--where FIELD REGEX` for ANDed regex rules and `--where-any FIELD REGEX`
-for an OR group. The older `-F/--field` and `-m/--match` pair remains accepted:
+for a single OR group:
 
 ```bash
 pvwa-toolkit accounts -f hosts.txt \
   --where user '^svc_' --where safe '^Linux-Prod$' list
+```
+
+All `--where-any` occurrences belong to one OR group, which is ANDed with exact
+selectors, every `--where` rule, and activity selectors:
+
+```bash
+pvwa-toolkit accounts -f hosts.txt \
+  --where safe '^Linux-Prod$' \
+  --where-any user '^svc_' --where-any address '^db' list
 ```
 
 Activity file categories are selectors. `--dpt` is an alias for the commonly
@@ -121,7 +130,7 @@ Available actions are `list`, `set-password`, `copy-password`, `link-account`,
 are previews unless `--execute` is present and require an address or account-ID
 scope unless `--all-accounts` is explicit.
 
-`move-safe` is reserved in the v2 grammar but execution is intentionally blocked
+`move-safe` is reserved in the grammar but execution is intentionally blocked
 until a supported safe-move adapter is selected for the target PVWA version; the
 toolkit does not emulate it with a destructive retrieve/delete/recreate sequence.
 
@@ -168,12 +177,6 @@ category present only in the playbook is retained. When both provide the same
 category, their values are intersected. Playbooks can declare required
 categories such as `addresses`; validation occurs before any account mutation.
 Each task resolves and freezes its account IDs before its ordered actions run.
-
-## Compatibility commands
-
-The original `list`, `update-password`, `set-ssh-key-policy`, `link-reconcile`,
-and `rotate-reconcile` commands remain available during migration. New
-automation should use the `accounts` and `playbook` resource commands.
 
 The process exits with `0` on success, `1` for configuration or session errors,
 and `2` when one or more per-account operations fail.
