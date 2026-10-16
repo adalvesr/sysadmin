@@ -2,7 +2,7 @@ version: 1
 connection: production
 
 # The playbook supplies policy; the caller supplies -H/--hostname or -f/--file.
-required_selectors:
+required-selectors:
   - addresses
 
 tasks:
@@ -14,13 +14,12 @@ tasks:
         - UnixSSH
         - UnixSSHKeys
 
-      discovery_platform_types:
+      discovery-platform-types:
         - Unix SSH Key
 
-      match:
-        all:
-          - field: user
-            regex: "^(root|oracle)$"
+      where:
+        - field: user
+          regex: "^(root|oracle)$"
 
     actions:
       - list:
@@ -31,11 +30,17 @@ tasks:
             - safe
             - platform
 
-      - change_platform:
+      - change-platform:
           platform: UnixSSHKeys
 
-      - set_management:
+      - set-management:
           enabled: false
           reason: SSH key account
+
+      - link-account:
+          role: reconcile
+          source:
+            account: svc_reconcile
+            same-address: true
 
       - reconcile: {}

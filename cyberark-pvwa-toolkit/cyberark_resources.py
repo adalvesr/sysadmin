@@ -126,13 +126,21 @@ def _add_execute(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_source_arguments(
+    parser: argparse.ArgumentParser, *, allow_same_address: bool = False
+) -> None:
     source = parser.add_argument_group("source account")
     source.add_argument("--source-id")
     source.add_argument("--source-account")
     source.add_argument("--source-address")
     source.add_argument("--source-platform")
     source.add_argument("--source-safe")
+    if allow_same_address:
+        source.add_argument(
+            "--source-same-address",
+            action="store_true",
+            help="resolve one source account for each destination address",
+        )
 
 
 def add_resource_parsers(commands: argparse._SubParsersAction[Any]) -> None:
@@ -178,7 +186,7 @@ def add_resource_parsers(commands: argparse._SubParsersAction[Any]) -> None:
     link.add_argument("--role", choices=("logon", "reconcile"), required=True)
     link.add_argument("--index", type=int)
     link.add_argument("--folder", default="Root")
-    _add_source_arguments(link)
+    _add_source_arguments(link, allow_same_address=True)
     _add_execute(link)
 
     platform = actions.add_parser("change-platform", help="change the account platform")
@@ -258,15 +266,18 @@ def selector_from_args(args: argparse.Namespace) -> SelectorSpec:
     )
 
 
-def _source_options(args: argparse.Namespace) -> dict[str, str]:
-    values = {
+def _source_options(args: argparse.Namespace) -> dict[str, Any]:
+    values: dict[str, Any] = {
         "id": args.source_id,
         "account": args.source_account,
         "address": args.source_address,
         "platform": args.source_platform,
         "safe": args.source_safe,
     }
-    return {key: value for key, value in values.items() if value is not None}
+    options = {key: value for key, value in values.items() if value is not None}
+    if getattr(args, "source_same_address", False):
+        options["same_address"] = True
+    return options
 
 
 def _action_from_args(args: argparse.Namespace) -> ActionSpec:

@@ -156,12 +156,47 @@ pvwa-toolkit accounts -f hosts.txt --account local_admin \
   copy-password --source-id SOURCE_ACCOUNT_ID --execute
 ```
 
+To link one reconciliation account per destination address, combine its account
+name with `--source-same-address`. The toolkit resolves every source before it
+changes any account and requires exactly one match on each address:
+
+```bash
+pvwa-toolkit accounts -f hosts.txt \
+  link-account \
+  --role reconcile \
+  --source-account svc_reconcile \
+  --source-same-address
+```
+
+The command is a preview until `--execute` is added. Reconciliation links use
+extra-password index `3` by default; override it with `--index` when needed.
+
 ## Playbooks
 
 YAML playbooks provide ordered account actions. See
 [`account-playbook.example.yml`](account-playbook.example.yml). Runtime CLI
 selectors supply or narrow playbook selectors, so inventories do not need to be
 embedded in the playbook:
+
+Playbook keys use the same hyphenated style as CLI commands and options. Python
+identifiers are normalized internally and are not part of the playbook format:
+
+```yaml
+version: 1
+required-selectors: [addresses]
+tasks:
+  - name: Link reconciliation accounts
+    select:
+      where:
+        - field: user
+          regex: "^(root|oracle)$"
+    actions:
+      - link-account:
+          role: reconcile
+          source:
+            account: svc_reconcile
+            same-address: true
+```
 
 ```bash
 pvwa-toolkit --config ./pvwa-toolkit.toml playbook \

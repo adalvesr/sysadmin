@@ -26,18 +26,57 @@ ACCOUNTS = [
     },
 ]
 
+SAME_ADDRESS_ACCOUNTS = [
+    {
+        "id": "1",
+        "userName": "root",
+        "address": "host01",
+        "platformId": "UnixSSH",
+        "safeName": "Linux-01",
+        "name": "root-host01",
+    },
+    {
+        "id": "r1",
+        "userName": "svc_reconcile",
+        "address": "host01",
+        "platformId": "UnixSSH",
+        "safeName": "Reconcile-01",
+        "name": "reconcile-host01",
+        "folder": "Root",
+    },
+    {
+        "id": "2",
+        "userName": "oracle",
+        "address": "host02",
+        "platformId": "UnixSSH",
+        "safeName": "Linux-02",
+        "name": "oracle-host02",
+    },
+    {
+        "id": "r2",
+        "userName": "svc_reconcile",
+        "address": "host02",
+        "platformId": "UnixSSH",
+        "safeName": "Reconcile-02",
+        "name": "reconcile-host02",
+        "folder": "Root",
+    },
+]
+
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, accounts=None):
+        self.accounts = list(accounts or ACCOUNTS)
         self.password_updates = []
         self.retrieve_calls = 0
         self.retrieve_reason = None
+        self.link_calls = []
 
     def search_accounts(self, _term):
-        return ACCOUNTS
+        return self.accounts
 
     def get_account(self, account_id, **_kwargs):
-        return next(item for item in ACCOUNTS if item["id"] == account_id)
+        return next(item for item in self.accounts if item["id"] == account_id)
 
     def get_activities(self, _account_id, *, limit):
         return []
@@ -49,6 +88,19 @@ class FakeClient:
         self.retrieve_calls += 1
         self.retrieve_reason = reason
         return "source-secret"
+
+    def link_account(
+        self,
+        account_id,
+        *,
+        safe,
+        name,
+        folder,
+        extra_password_index,
+    ):
+        self.link_calls.append(
+            (account_id, safe, name, folder, extra_password_index)
+        )
 
 
 class EngineTests(unittest.TestCase):
@@ -104,6 +156,55 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(client.retrieve_calls, 1)
         self.assertEqual(client.retrieve_reason, "approved maintenance")
         self.assertEqual(client.password_updates, [("2", "source-secret")])
+
+    def test_link_account_resolves_one_source_per_destination_address(self):
+        client = FakeClient(SAME_ADDRESS_ACCOUNTS)
+        action = ActionSpec(
+            "link_account",
+            {
+                "role": "reconcile",
+                "source": {"account": "svc_reconcile", "same_address": True},
+            },
+        )
+        task = self.task(
+            action,
+            SelectorSpec(addresses=["host01", "host02"]),
+        )
+
+        self.assertEqual(ExecutionEngine(client).run_tasks([task], execute=True), 0)
+        self.assertEqual(
+            client.link_calls,
+            [
+                ("1", "Reconcile-01", "reconcile-host01", "Root", 3),
+                ("2", "Reconcile-02", "reconcile-host02", "Root", 3),
+            ],
+        )
+
+    def test_link_account_validates_all_same_address_sources_before_mutating(self):
+        accounts = [
+            *SAME_ADDRESS_ACCOUNTS,
+            {
+                **SAME_ADDRESS_ACCOUNTS[-1],
+                "id": "r3",
+                "name": "duplicate-reconcile-host02",
+            },
+        ]
+        client = FakeClient(accounts)
+        action = ActionSpec(
+            "link_account",
+            {
+                "role": "reconcile",
+                "source": {"account": "svc_reconcile", "same_address": True},
+            },
+        )
+        task = self.task(
+            action,
+            SelectorSpec(addresses=["host01", "host02"]),
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "found 2"):
+            ExecutionEngine(client).run_tasks([task], execute=True)
+        self.assertEqual(client.link_calls, [])
 
     def test_move_safe_refuses_unverified_destructive_emulation(self):
         client = FakeClient()

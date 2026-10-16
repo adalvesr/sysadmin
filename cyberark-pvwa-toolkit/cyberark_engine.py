@@ -73,7 +73,7 @@ class ExecutionEngine:
                 if not effective.has_mutation_scope():
                     raise ConfigurationError(
                         f"Task {task.name!r} mutates accounts and requires addresses, "
-                        "account IDs, or all_accounts: true"
+                        "account IDs, or all-accounts: true"
                     )
             self.info(f"Task: {task.name}")
             accounts = self.selector.resolve(effective)
@@ -124,7 +124,7 @@ class ExecutionEngine:
     def _set_password(
         self, accounts: list[dict[str, Any]], options: dict[str, Any], execute: bool
     ) -> bool:
-        self._validate_options(options, {"mode", "length", "password_env"}, "set_password")
+        self._validate_options(options, {"mode", "length", "password_env"}, "set-password")
         mode = options.get("mode")
         modes = {
             "prompt-shared",
@@ -135,12 +135,12 @@ class ExecutionEngine:
         }
         if mode not in modes:
             raise ConfigurationError(
-                "set_password.mode must be prompt-shared, prompt-distinct, "
+                "set-password.mode must be prompt-shared, prompt-distinct, "
                 "random-shared, random-distinct, or environment-shared"
             )
         length = options.get("length", 30)
         if not isinstance(length, int) or isinstance(length, bool) or length < 12:
-            raise ConfigurationError("set_password.length must be an integer of at least 12")
+            raise ConfigurationError("set-password.length must be an integer of at least 12")
         if not execute:
             self.success(
                 f"Preview: set password on {len(accounts)} account(s) using {mode}."
@@ -156,7 +156,7 @@ class ExecutionEngine:
             variable = options.get("password_env")
             if not isinstance(variable, str) or not variable:
                 raise ConfigurationError(
-                    "environment-shared requires set_password.password_env"
+                    "environment-shared requires set-password.password-env"
                 )
             shared = os.getenv(variable)
             if not shared:
@@ -181,8 +181,8 @@ class ExecutionEngine:
     def _copy_password(
         self, accounts: list[dict[str, Any]], options: dict[str, Any], execute: bool
     ) -> bool:
-        self._validate_options(options, {"source", "reason"}, "copy_password")
-        source = self._resolve_source(options.get("source"), "copy_password")
+        self._validate_options(options, {"source", "reason"}, "copy-password")
+        source = self._resolve_source(options.get("source"), "copy-password")
         self.info(
             f"Password source: {source.get('id')} | {source.get('userName')} | "
             f"{source.get('address')} | {source.get('safeName')}"
@@ -193,7 +193,7 @@ class ExecutionEngine:
             return False
         reason = options.get("reason", "")
         if not isinstance(reason, str):
-            raise ConfigurationError("copy_password.reason must be a string")
+            raise ConfigurationError("copy-password.reason must be a string")
         password = self.client.retrieve_password(str(source["id"]), reason=reason)
         return self._per_account(
             destinations,
@@ -204,46 +204,122 @@ class ExecutionEngine:
     def _link_account(
         self, accounts: list[dict[str, Any]], options: dict[str, Any], execute: bool
     ) -> bool:
-        self._validate_options(options, {"role", "source", "index", "folder"}, "link_account")
+        self._validate_options(options, {"role", "source", "index", "folder"}, "link-account")
         role = options.get("role")
         if role not in {"logon", "reconcile"}:
-            raise ConfigurationError("link_account.role must be logon or reconcile")
+            raise ConfigurationError("link-account.role must be logon or reconcile")
         index = options.get("index", 1 if role == "logon" else 3)
         if not isinstance(index, int) or isinstance(index, bool) or index <= 0:
-            raise ConfigurationError("link_account.index must be a positive integer")
-        source = self._resolve_source(options.get("source"), "link_account")
-        detail = self.client.get_account(str(source["id"]), include_internal=True)
-        safe = detail.get("safeName") or source.get("safeName")
-        name = detail.get("name") or source.get("name")
-        folder = detail.get("folder") or detail.get("location") or options.get("folder", "Root")
-        if not safe or not name:
-            raise ConfigurationError("Linked account must have a safe and object name")
-        destinations = [item for item in accounts if str(item.get("id")) != str(source["id"])]
+            raise ConfigurationError("link-account.index must be a positive integer")
+        source_options = options.get("source")
+        if not isinstance(source_options, dict):
+            raise ConfigurationError("link-account.source must be a selector mapping")
+        same_address = source_options.get("same_address", False)
+        if not isinstance(same_address, bool):
+            raise ConfigurationError("link-account.source.same-address must be a boolean")
+        source_query = {
+            key: value for key, value in source_options.items() if key != "same_address"
+        }
+        if same_address and "address" in source_query:
+            raise ConfigurationError(
+                "link-account source cannot combine address with same-address"
+            )
+
+        sources_by_address: dict[str, dict[str, Any]] = {}
+        if same_address:
+            if not source_query:
+                raise ConfigurationError(
+                    "link-account same-address source must specify account criteria"
+                )
+            for account in accounts:
+                address = str(account.get("address") or "").strip()
+                if not address:
+                    raise ConfigurationError(
+                        f"Target account {account.get('id')} has no address"
+                    )
+                key = address.casefold()
+                if key not in sources_by_address:
+                    sources_by_address[key] = self._resolve_source(
+                        {**source_query, "address": address},
+                        f"link-account for address {address!r}",
+                    )
+            for address, source in sources_by_address.items():
+                self.info(
+                    f"Linked-account source for {address}: {source.get('id')} | "
+                    f"{source.get('userName')} | {source.get('safeName')}"
+                )
+        else:
+            source = self._resolve_source(source_query, "link-account")
+            sources_by_address[""] = source
+            self.info(
+                f"Linked-account source: {source.get('id')} | "
+                f"{source.get('userName')} | {source.get('address')} | "
+                f"{source.get('safeName')}"
+            )
+
+        references: dict[str, tuple[str, str, str]] = {}
+        for source in sources_by_address.values():
+            source_id = str(source["id"])
+            if source_id in references:
+                continue
+            detail = self.client.get_account(source_id, include_internal=True)
+            safe = detail.get("safeName") or source.get("safeName")
+            name = detail.get("name") or source.get("name")
+            folder = (
+                detail.get("folder")
+                or detail.get("location")
+                or options.get("folder", "Root")
+            )
+            if not safe or not name:
+                raise ConfigurationError(
+                    f"Linked account {source_id} must have a safe and object name"
+                )
+            references[source_id] = (str(safe), str(name), str(folder))
+
+        planned: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for account in accounts:
+            source = (
+                sources_by_address[str(account.get("address") or "").strip().casefold()]
+                if same_address
+                else sources_by_address[""]
+            )
+            if str(account.get("id")) != str(source["id"]):
+                planned.append((account, source))
         if not execute:
+            source_count = len({str(source["id"]) for _, source in planned})
             self.success(
-                f"Preview: link {role} account {source['id']} to "
-                f"{len(destinations)} account(s)."
+                f"Preview: link {role} account(s) to {len(planned)} account(s) "
+                f"using {source_count} source account(s)."
             )
             return False
-        return self._per_account(
-            destinations,
-            lambda account: self.client.link_account(
+        sources_by_target = {
+            str(account["id"]): source for account, source in planned
+        }
+
+        def link(account: dict[str, Any]) -> None:
+            source = sources_by_target[str(account["id"])]
+            safe, name, folder = references[str(source["id"])]
+            self.client.link_account(
                 str(account["id"]),
-                safe=str(safe),
-                name=str(name),
-                folder=str(folder),
+                safe=safe,
+                name=name,
+                folder=folder,
                 extra_password_index=index,
-            ),
+            )
+
+        return self._per_account(
+            [account for account, _ in planned],
+            link,
             f"{role} account linked",
         )
 
     def _change_platform(
         self, accounts: list[dict[str, Any]], options: dict[str, Any], execute: bool
     ) -> bool:
-        self._validate_options(options, {"platform"}, "change_platform")
+        self._validate_options(options, {"platform"}, "change-platform")
         platform = options.get("platform")
         if not isinstance(platform, str) or not platform:
-            raise ConfigurationError("change_platform.platform is required")
+            raise ConfigurationError("change-platform.platform is required")
         targets = [item for item in accounts if item.get("platformId") != platform]
         return self._patch_value(
             targets, "/platformId", platform, "platform changed", execute
@@ -252,25 +328,25 @@ class ExecutionEngine:
     def _move_safe(
         self, accounts: list[dict[str, Any]], options: dict[str, Any], execute: bool
     ) -> bool:
-        self._validate_options(options, {"safe"}, "move_safe")
+        self._validate_options(options, {"safe"}, "move-safe")
         safe = options.get("safe")
         if not isinstance(safe, str) or not safe:
-            raise ConfigurationError("move_safe.safe is required")
+            raise ConfigurationError("move-safe.safe is required")
         raise ConfigurationError(
-            "move_safe is reserved but not executable: moving an account between safes "
+            "move-safe is reserved but not executable: moving an account between safes "
             "is not a supported Accounts PATCH operation in the validated API"
         )
 
     def _set_management(
         self, accounts: list[dict[str, Any]], options: dict[str, Any], execute: bool
     ) -> bool:
-        self._validate_options(options, {"enabled", "reason"}, "set_management")
+        self._validate_options(options, {"enabled", "reason"}, "set-management")
         enabled = options.get("enabled")
         if not isinstance(enabled, bool):
-            raise ConfigurationError("set_management.enabled must be a boolean")
+            raise ConfigurationError("set-management.enabled must be a boolean")
         reason = options.get("reason", "")
         if not isinstance(reason, str):
-            raise ConfigurationError("set_management.reason must be a string")
+            raise ConfigurationError("set-management.reason must be a string")
         planned: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         for account in accounts:
             detail = self.client.get_account(str(account["id"]))

@@ -18,16 +18,24 @@ class PlaybookTests(unittest.TestCase):
                 """
 version: 1
 connection: production
-required_selectors: [addresses]
+required-selectors: [addresses]
 tasks:
   - name: Configure SSH keys
     target: accounts
     select:
       addresses:
         files: [hosts.txt]
-      discovery_platform_types: [Unix SSH Key]
+      discovery-platform-types: [Unix SSH Key]
+      where:
+        - field: user
+          regex: "^(root|oracle)$"
+      where-any:
+        - field: safe
+          regex: "^Linux-"
+        - field: address
+          regex: "^host"
     actions:
-      - change_platform:
+      - change-platform:
           platform: UnixSSHKeys
       - reconcile: {}
 """,
@@ -42,6 +50,20 @@ tasks:
                 {"DiscoveryPlatformType": ["Unix SSH Key"]},
             )
             self.assertEqual(
+                [
+                    (rule.field, rule.pattern)
+                    for rule in result.tasks[0].selector.matches_all
+                ],
+                [("user", "^(root|oracle)$")],
+            )
+            self.assertEqual(
+                [
+                    (rule.field, rule.pattern)
+                    for rule in result.tasks[0].selector.match_any_groups[0]
+                ],
+                [("safe", "^Linux-"), ("address", "^host")],
+            )
+            self.assertEqual(
                 [action.name for action in result.tasks[0].actions],
                 ["change_platform", "reconcile"],
             )
@@ -52,6 +74,57 @@ tasks:
             path.write_text("version: 1\nunknown: true\ntasks: []\n", encoding="utf-8")
             with self.assertRaisesRegex(ConfigurationError, "unknown"):
                 load_playbook(path)
+
+    def test_loads_same_address_link_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "link.yml"
+            path.write_text(
+                """
+version: 1
+tasks:
+  - name: Link reconciliation accounts
+    select:
+      addresses: [host01]
+    actions:
+      - link-account:
+          role: reconcile
+          source:
+            account: svc_reconcile
+            same-address: true
+""",
+                encoding="utf-8",
+            )
+
+            action = load_playbook(path).tasks[0].actions[0]
+            self.assertEqual(action.name, "link_account")
+            self.assertEqual(
+                action.options["source"],
+                {"account": "svc_reconcile", "same_address": True},
+            )
+
+    def test_rejects_underscore_action_and_selector_names(self):
+        documents = [
+            """
+version: 1
+required_selectors: [addresses]
+tasks: []
+""",
+            """
+version: 1
+tasks:
+  - select:
+      all_accounts: true
+    actions:
+      - set_password:
+          mode: random-distinct
+""",
+        ]
+        for content in documents:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "underscores.yml"
+                path.write_text(content, encoding="utf-8")
+                with self.assertRaises(ConfigurationError):
+                    load_playbook(path)
 
 
 if __name__ == "__main__":

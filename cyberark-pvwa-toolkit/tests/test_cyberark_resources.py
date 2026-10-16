@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from cyberark_cli import build_parser, normalize_global_arguments
-from cyberark_resources import selector_from_args
+from cyberark_resources import _action_from_args, selector_from_args
 
 
 class ResourceCliTests(unittest.TestCase):
@@ -59,6 +59,26 @@ class ResourceCliTests(unittest.TestCase):
         )
         self.assertEqual(args.mode, "random-distinct")
         self.assertFalse(args.execute)
+
+    def test_link_account_can_resolve_a_source_per_destination_address(self):
+        args = build_parser().parse_args(
+            [
+                "accounts",
+                "-f",
+                "hosts.txt",
+                "link-account",
+                "--role",
+                "reconcile",
+                "--source-account",
+                "svc_reconcile",
+                "--source-same-address",
+            ]
+        )
+        action = _action_from_args(args)
+        self.assertEqual(
+            action.options["source"],
+            {"account": "svc_reconcile", "same_address": True},
+        )
 
 
 if __name__ == "__main__":
