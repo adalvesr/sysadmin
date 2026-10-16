@@ -189,3 +189,11 @@ The unit tests use fake HTTP sessions and never connect to a Vault:
 python3 -m unittest discover -s tests -v
 ```
 
+## Maintainer
+
+Adérito Alves (`adalvesr`)
+
+## License
+
+Licensed under the MIT License. See [LICENSE](../LICENSE).
+
