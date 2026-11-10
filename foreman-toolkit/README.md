@@ -20,6 +20,8 @@ Python packages.
   promotion order are never embedded in the code.
 - Retrieves complete inventories with numeric Hammer pagination. Use
   `--page-size` to override the default batch size if required by the server.
+  Composite component listings are intentionally not paginated because the
+  Foreman 3.13 / Katello 4.15 Hammer command does not accept pagination options.
 - Reuses an automatically discovered component when its latest publication is
   newer than every selected composite that depends on it.
 - Reuses any latest version published within the freshness window, which is 24

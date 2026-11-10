@@ -276,14 +276,16 @@ class Hammer:
         return views
 
     def list_components(self, composite_id: int) -> list[Component]:
-        rows = self.paginated_json(
-            "content-view",
-            "component",
-            "list",
-            "--composite-content-view-id",
-            str(composite_id),
-            "--organization",
-            self.organization,
+        rows = _rows(
+            self.json(
+                "content-view",
+                "component",
+                "list",
+                "--composite-content-view-id",
+                str(composite_id),
+                "--organization",
+                self.organization,
+            )
         )
         components: list[Component] = []
         for row in rows:

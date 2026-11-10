@@ -108,6 +108,24 @@ class HelpersTests(unittest.TestCase):
             ("content-view", "list", "--page", "2", "--per-page", "2"),
         )
 
+    def test_component_listing_does_not_pass_pagination_options(self):
+        hammer = module.Hammer("hammer", "ACME", page_size=100)
+        hammer.json = Mock(return_value=[])
+
+        self.assertEqual(hammer.list_components(52), [])
+        self.assertEqual(
+            hammer.json.call_args.args,
+            (
+                "content-view",
+                "component",
+                "list",
+                "--composite-content-view-id",
+                "52",
+                "--organization",
+                "ACME",
+            ),
+        )
+
     def test_hammer_dates_are_normalized_to_utc(self):
         local_timezone = datetime.now().astimezone().tzinfo
         expected = datetime(
