@@ -3,8 +3,9 @@ import io
 import unittest
 from argparse import Namespace
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "publish_content_views.py"
@@ -85,13 +86,124 @@ class HelpersTests(unittest.TestCase):
             module.parse_requested(["RHEL9, Rocky9", "RHEL9"], None), ["RHEL9", "Rocky9"]
         )
 
+    def test_hammer_uses_numeric_pagination_until_the_last_page(self):
+        hammer = module.Hammer("hammer", "ACME", page_size=2)
+        hammer.json = Mock(
+            side_effect=[
+                [{"Id": 1}, {"Id": 2}],
+                [{"Id": 3}],
+            ]
+        )
+
+        self.assertEqual(
+            hammer.paginated_json("content-view", "list"),
+            [{"Id": 1}, {"Id": 2}, {"Id": 3}],
+        )
+        self.assertEqual(
+            hammer.json.call_args_list[0].args,
+            ("content-view", "list", "--page", "1", "--per-page", "2"),
+        )
+        self.assertEqual(
+            hammer.json.call_args_list[1].args,
+            ("content-view", "list", "--page", "2", "--per-page", "2"),
+        )
+
+    def test_hammer_dates_are_normalized_to_utc(self):
+        local_timezone = datetime.now().astimezone().tzinfo
+        expected = datetime(
+            2026, 11, 10, 12, 30, tzinfo=local_timezone
+        ).astimezone(timezone.utc)
+        self.assertEqual(
+            module._parse_datetime("2026/11/10 12:30:00"),
+            expected,
+        )
+
+
+class PublicationPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        self.component = module.ContentView(
+            1, "Component", False, self.now - timedelta(days=3)
+        )
+        self.composite = module.ContentView(
+            10, "Composite", True, self.now - timedelta(days=4)
+        )
+        self.catalog = module.Catalog(
+            [self.component, self.composite],
+            {10: [module.Component(100, 1, True)]},
+        )
+        self.versions = {
+            1: module.Version(101, "2.0"),
+            10: module.Version(110, "3.0"),
+        }
+
+    def build_plan(self, explicit, force=False):
+        return module.build_publication_plan(
+            ordered=[self.component, self.composite],
+            catalog=self.catalog,
+            explicitly_requested=explicit,
+            current_versions=self.versions,
+            max_age=timedelta(hours=24),
+            force_publish=force,
+            now=self.now,
+        )
+
+    def test_discovered_component_newer_than_composite_is_reused(self):
+        plan = self.build_plan(explicit={10})
+        self.assertFalse(plan[0].publish)
+        self.assertIn("newer than every selected dependent composite", plan[0].reason)
+        self.assertTrue(plan[1].publish)
+
+    def test_recent_explicit_view_is_reused(self):
+        recent = module.ContentView(1, "Component", False, self.now - timedelta(hours=12))
+        catalog = module.Catalog([recent], {})
+        plan = module.build_publication_plan(
+            ordered=[recent],
+            catalog=catalog,
+            explicitly_requested={1},
+            current_versions={1: module.Version(101, "2.0")},
+            max_age=timedelta(hours=24),
+            force_publish=False,
+            now=self.now,
+        )
+        self.assertFalse(plan[0].publish)
+        self.assertIn("freshness window", plan[0].reason)
+
+    def test_force_publish_overrides_reuse_rules(self):
+        plan = self.build_plan(explicit={10}, force=True)
+        self.assertTrue(all(item.publish for item in plan))
+
+    def test_newer_component_forces_recent_composite_publication(self):
+        component = module.ContentView(
+            1, "Component", False, self.now - timedelta(minutes=30)
+        )
+        composite = module.ContentView(
+            10, "Composite", True, self.now - timedelta(hours=1)
+        )
+        catalog = module.Catalog(
+            [component, composite],
+            {10: [module.Component(100, 1, True)]},
+        )
+        plan = module.build_publication_plan(
+            ordered=[component, composite],
+            catalog=catalog,
+            explicitly_requested={10},
+            current_versions=self.versions,
+            max_age=timedelta(hours=24),
+            force_publish=False,
+            now=self.now,
+        )
+        self.assertFalse(plan[0].publish)
+        self.assertTrue(plan[1].publish)
+        self.assertIn("components are newer", plan[1].reason)
+
 
 class SequentialExecutionTests(unittest.TestCase):
     def test_run_waits_for_each_simple_before_the_composite(self):
         class FakeHammer:
             instance = None
 
-            def __init__(self, executable, organization, verbose):
+            def __init__(self, executable, organization, page_size, verbose):
                 self.events = []
                 self.versions = {1: [], 2: [], 10: []}
                 FakeHammer.instance = self
@@ -137,6 +249,9 @@ class SequentialExecutionTests(unittest.TestCase):
             dry_run=False,
             keep_auto_publish=False,
             hammer="hammer",
+            page_size=100,
+            max_age_hours=24.0,
+            force_publish=False,
             verbose=False,
         )
         with patch.object(module, "Hammer", FakeHammer), patch.object(

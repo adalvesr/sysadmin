@@ -18,6 +18,15 @@ Python packages.
   previous task has finished.
 - Requires lifecycle environments as command-line arguments. Their names and
   promotion order are never embedded in the code.
+- Retrieves complete inventories with numeric Hammer pagination. Use
+  `--page-size` to override the default batch size if required by the server.
+- Reuses an automatically discovered component when its latest publication is
+  newer than every selected composite that depends on it.
+- Reuses any latest version published within the freshness window, which is 24
+  hours by default. A composite is still republished when a selected component
+  is newer, even when the composite itself is inside that window.
+- `--force-publish` (or `--force`) overrides both reuse rules and publishes
+  every Content View in the resolved plan.
 - Disables `auto-publish` on selected composites before starting. This is an
   intentional, persistent change because an automatic publication could start
   before all component publications finish and violate the requested order.
@@ -113,9 +122,34 @@ Apply one description to every version created during the run:
   RHEL9 Rocky9
 ```
 
+Change the default 24-hour freshness window:
+
+```bash
+./publish_content_views.py \
+  --organization "My Organization" \
+  --environment NonProd \
+  --environment Prod \
+  --max-age-hours 48 \
+  RHEL9
+```
+
+Use `--max-age-hours 0` to disable only the age-based rule. Force every
+resolved Content View to receive a new publication with:
+
+```bash
+./publish_content_views.py \
+  --organization "My Organization" \
+  --environment NonProd \
+  --environment Prod \
+  --force-publish \
+  RHEL9
+```
+
 Use `--verbose` to display Hammer commands and their output.
 `--keep-auto-publish` is intended only for installations that deliberately
 manage that concurrency elsewhere; it is not recommended for this workflow.
+The optional `--page-size` value must be a positive integer and defaults to
+`100`; the script never passes the unsupported `--per-page all` value.
 
 ## Operational safety
 

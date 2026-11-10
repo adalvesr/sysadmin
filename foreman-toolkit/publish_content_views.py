@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -29,6 +30,7 @@ class ContentView:
     id: int
     name: str
     composite: bool
+    published_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,16 @@ class Environment:
 class Version:
     id: int
     number: str
+    environments: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class PlanItem:
+    view: ContentView
+    publish: bool
+    reason: str
+    current_version: Version | None
+    effective_published_at: datetime
 
 
 def _normalise_key(value: object) -> str:
@@ -66,6 +78,15 @@ def _field(row: dict[str, Any], *names: str) -> Any:
     )
 
 
+def _optional_field(row: dict[str, Any], *names: str) -> Any:
+    normalised = {_normalise_key(key): value for key, value in row.items()}
+    for name in names:
+        key = _normalise_key(name)
+        if key in normalised:
+            return normalised[key]
+    return None
+
+
 def _as_int(value: Any, field_name: str) -> int:
     match = re.search(r"\d+", str(value))
     if not match:
@@ -79,6 +100,69 @@ def _as_bool(value: Any) -> bool:
     return str(value).strip().casefold() in {"true", "yes", "y", "1"}
 
 
+def _as_name_set(value: Any) -> frozenset[str]:
+    if value is None:
+        return frozenset()
+    if isinstance(value, list):
+        return frozenset(str(item).strip() for item in value if str(item).strip())
+    text = str(value).strip()
+    if not text:
+        return frozenset()
+    return frozenset(part.strip() for part in text.split(",") if part.strip())
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None or not str(value).strip():
+        return None
+    text = str(value).strip()
+    iso_text = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(iso_text)
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        formats = (
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S %Z",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S %Z",
+        )
+        for date_format in formats:
+            try:
+                parsed = datetime.strptime(text, date_format)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        raise PublishError(f"Unsupported Hammer date format: {text!r}")
+    if parsed.tzinfo is None:
+        assumed_timezone = (
+            timezone.utc if text.endswith(" UTC") else datetime.now().astimezone().tzinfo
+        )
+        parsed = parsed.replace(tzinfo=assumed_timezone)
+    return parsed.astimezone(timezone.utc)
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
+
+
+def _non_negative_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("must be a finite, non-negative number")
+    return number
+
+
 def _rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict) and "results" in payload:
         payload = payload["results"]
@@ -88,9 +172,16 @@ def _rows(payload: Any) -> list[dict[str, Any]]:
 
 
 class Hammer:
-    def __init__(self, executable: str, organization: str, verbose: bool = False):
+    def __init__(
+        self,
+        executable: str,
+        organization: str,
+        page_size: int,
+        verbose: bool = False,
+    ):
         self.executable = executable
         self.organization = organization
+        self.page_size = page_size
         self.verbose = verbose
 
     def _execute(self, arguments: Sequence[str], json_output: bool) -> str:
@@ -131,6 +222,31 @@ class Hammer:
         except json.JSONDecodeError as error:
             raise PublishError(f"Invalid JSON output from Hammer: {error}\n{output}") from error
 
+    def paginated_json(self, *arguments: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen_pages: set[str] = set()
+        page = 1
+        while True:
+            current = _rows(
+                self.json(
+                    *arguments,
+                    "--page",
+                    str(page),
+                    "--per-page",
+                    str(self.page_size),
+                )
+            )
+            signature = json.dumps(current, sort_keys=True)
+            if current and signature in seen_pages:
+                raise PublishError(
+                    "Hammer returned the same page more than once while paginating"
+                )
+            seen_pages.add(signature)
+            rows.extend(current)
+            if len(current) < self.page_size:
+                return rows
+            page += 1
+
     def mutate(self, *arguments: str) -> None:
         # Without --async Hammer waits for the Dynflow task to finish. The next
         # operation is not started until this method returns.
@@ -139,27 +255,28 @@ class Hammer:
             print(output, flush=True)
 
     def list_content_views(self) -> list[ContentView]:
-        payload = self.json(
+        rows = self.paginated_json(
             "content-view",
             "list",
             "--organization",
             self.organization,
-            "--per-page",
-            "all",
         )
         views: list[ContentView] = []
-        for row in _rows(payload):
+        for row in rows:
             views.append(
                 ContentView(
                     id=_as_int(_field(row, "Content View ID", "Id"), "Content View ID"),
                     name=str(_field(row, "Name")),
                     composite=_as_bool(_field(row, "Composite")),
+                    published_at=_parse_datetime(
+                        _optional_field(row, "Last Published")
+                    ),
                 )
             )
         return views
 
     def list_components(self, composite_id: int) -> list[Component]:
-        payload = self.json(
+        rows = self.paginated_json(
             "content-view",
             "component",
             "list",
@@ -167,11 +284,9 @@ class Hammer:
             str(composite_id),
             "--organization",
             self.organization,
-            "--per-page",
-            "all",
         )
         components: list[Component] = []
-        for row in _rows(payload):
+        for row in rows:
             version = str(_field(row, "Version")).strip().casefold()
             components.append(
                 Component(
@@ -185,24 +300,22 @@ class Hammer:
         return components
 
     def list_environments(self) -> list[Environment]:
-        payload = self.json(
+        rows = self.paginated_json(
             "lifecycle-environment",
             "list",
             "--organization",
             self.organization,
-            "--per-page",
-            "all",
         )
         return [
             Environment(
                 id=_as_int(_field(row, "ID", "Id"), "Environment ID"),
                 name=str(_field(row, "Name")),
             )
-            for row in _rows(payload)
+            for row in rows
         ]
 
     def list_versions(self, content_view_id: int) -> list[Version]:
-        payload = self.json(
+        rows = self.paginated_json(
             "content-view",
             "version",
             "list",
@@ -210,15 +323,16 @@ class Hammer:
             str(content_view_id),
             "--organization",
             self.organization,
-            "--per-page",
-            "all",
         )
         return [
             Version(
                 id=_as_int(_field(row, "Id", "ID"), "Version ID"),
                 number=str(_field(row, "Version")),
+                environments=_as_name_set(
+                    _optional_field(row, "Lifecycle Environments", "Environments")
+                ),
             )
-            for row in _rows(payload)
+            for row in rows
         ]
 
     def disable_auto_publish(self, view: ContentView) -> None:
@@ -361,6 +475,81 @@ class Catalog:
         return result
 
 
+def build_publication_plan(
+    ordered: Sequence[ContentView],
+    catalog: Catalog,
+    explicitly_requested: set[int],
+    current_versions: dict[int, Version | None],
+    max_age: timedelta,
+    force_publish: bool,
+    now: datetime,
+) -> list[PlanItem]:
+    selected_ids = {view.id for view in ordered}
+    effective_dates: dict[int, datetime] = {}
+    plan: list[PlanItem] = []
+
+    for view in ordered:
+        version = current_versions[view.id]
+        current_date = view.published_at
+        publish = True
+        reason = "forced by --force-publish"
+
+        if not force_publish:
+            if version is None or current_date is None:
+                reason = "no existing published version"
+            else:
+                dependency_dates = [
+                    effective_dates[component.content_view_id]
+                    for component in catalog.components.get(view.id, [])
+                    if component.content_view_id in effective_dates
+                ]
+                dependencies_are_newer = bool(dependency_dates) and any(
+                    dependency_date > current_date for dependency_date in dependency_dates
+                )
+
+                if view.composite and dependencies_are_newer:
+                    reason = "one or more selected components are newer"
+                else:
+                    publish = False
+                    reason = "published within the configured freshness window"
+
+                    if not view.composite and view.id not in explicitly_requested:
+                        dependent_composites = [
+                            catalog.by_id[composite_id]
+                            for composite_id in catalog.dependents.get(view.id, set())
+                            if composite_id in selected_ids
+                        ]
+                        if dependent_composites and all(
+                            composite.published_at is None
+                            or current_date > composite.published_at
+                            for composite in dependent_composites
+                        ):
+                            reason = "already newer than every selected dependent composite"
+                        elif max_age <= timedelta(0) or current_date < now - max_age:
+                            publish = True
+                            reason = "existing publication is outside the freshness window"
+                    elif max_age <= timedelta(0) or current_date < now - max_age:
+                        publish = True
+                        reason = "existing publication is outside the freshness window"
+
+        effective_date = now if publish else current_date
+        if effective_date is None:
+            raise PublishError(
+                f"Could not determine an effective publication date for {view.name}"
+            )
+        effective_dates[view.id] = effective_date
+        plan.append(
+            PlanItem(
+                view=view,
+                publish=publish,
+                reason=reason,
+                current_version=version,
+                effective_published_at=effective_date,
+            )
+        )
+    return plan
+
+
 def parse_requested(values: Sequence[str], file_name: str | None) -> list[str]:
     names: list[str] = []
     for value in values:
@@ -418,6 +607,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hammer", default="hammer", help="Hammer executable (default: hammer)"
     )
+    parser.add_argument(
+        "--page-size",
+        type=_positive_int,
+        default=100,
+        help="numeric Hammer page size (default: 100)",
+    )
+    parser.add_argument(
+        "--max-age-hours",
+        type=_non_negative_float,
+        default=24.0,
+        help=(
+            "reuse versions published within this many hours; use 0 to disable "
+            "the freshness rule (default: 24)"
+        ),
+    )
+    parser.add_argument(
+        "--force-publish",
+        "--force",
+        action="store_true",
+        help="publish every selected Content View regardless of age or dependencies",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser
 
@@ -445,25 +655,31 @@ def resolve_environments(hammer: Hammer, names: Sequence[str]) -> list[Environme
 
 
 def print_plan(
-    ordered: Sequence[ContentView],
+    plan: Sequence[PlanItem],
     catalog: Catalog,
     environments: Sequence[Environment],
     disable_auto_publish: bool,
 ) -> None:
     print("\nExecution plan (strictly sequential):")
-    composites = [view for view in ordered if view.composite]
+    composites = [item.view for item in plan if item.view.composite and item.publish]
     if composites and disable_auto_publish:
         print("  0. Disable auto-publish: " + ", ".join(view.name for view in composites))
-    for index, view in enumerate(ordered, start=1):
+    for index, item in enumerate(plan, start=1):
+        view = item.view
         kind = "composite" if view.composite else "non-composite"
         dependencies = catalog.components.get(view.id, [])
         suffix = ""
         if dependencies:
             names = [catalog.by_id[item.content_view_id].name for item in dependencies]
             suffix = " [depends on: " + ", ".join(names) + "]"
-        print(f"  {index}. Publish {view.name} ({kind}){suffix}")
+        if item.publish:
+            print(f"  {index}. Publish {view.name} ({kind}){suffix}")
+        else:
+            version_number = item.current_version.number if item.current_version else "unknown"
+            print(f"  {index}. Reuse {view.name} version {version_number} ({kind}){suffix}")
+        print(f"     reason: {item.reason}")
         for environment in environments:
-            print(f"     promote the new version to {environment.name}")
+            print(f"     ensure the selected version is promoted to {environment.name}")
 
 
 def run(args: argparse.Namespace) -> None:
@@ -476,13 +692,31 @@ def run(args: argparse.Namespace) -> None:
     if shutil.which(args.hammer) is None:
         raise PublishError(f"Hammer executable not found: {args.hammer}")
 
-    hammer = Hammer(args.hammer, args.organization, args.verbose)
+    hammer = Hammer(args.hammer, args.organization, args.page_size, args.verbose)
     print(f"Discovering Content Views in organization {args.organization!r}...", flush=True)
     catalog = discover(hammer)
     selected = catalog.select(requested)
     ordered = catalog.ordered(selected)
     environments = resolve_environments(hammer, environment_names)
-    print_plan(ordered, catalog, environments, not args.keep_auto_publish)
+    versions_by_view = {
+        view.id: hammer.list_versions(view.id)
+        for view in ordered
+    }
+    current_versions = {
+        view_id: latest_version(versions)
+        for view_id, versions in versions_by_view.items()
+    }
+    explicitly_requested = {catalog.by_name[name].id for name in requested}
+    plan = build_publication_plan(
+        ordered=ordered,
+        catalog=catalog,
+        explicitly_requested=explicitly_requested,
+        current_versions=current_versions,
+        max_age=timedelta(hours=args.max_age_hours),
+        force_publish=args.force_publish,
+        now=datetime.now(timezone.utc),
+    )
+    print_plan(plan, catalog, environments, not args.keep_auto_publish)
     if args.dry_run:
         print("\nDry run completed; no changes were made.")
         return
@@ -490,16 +724,17 @@ def run(args: argparse.Namespace) -> None:
     description = args.description or (
         "Automated publication " + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-    composites = [view for view in ordered if view.composite]
+    composites = [item.view for item in plan if item.view.composite and item.publish]
     if composites and not args.keep_auto_publish:
         print("\nDisabling auto-publish on selected composites...", flush=True)
         for view in composites:
             print(f"  [{view.name}] auto-publish = no", flush=True)
             hammer.disable_auto_publish(view)
 
-    published_versions: dict[int, Version] = {}
+    selected_versions: dict[int, Version] = {}
     completed: set[int] = set()
-    for view in ordered:
+    for item in plan:
+        view = item.view
         dependencies = catalog.components.get(view.id, [])
         missing = [
             item.content_view_id
@@ -512,12 +747,12 @@ def run(args: argparse.Namespace) -> None:
                 f"Cannot safely publish {view.name}; incomplete dependencies: {names}"
             )
 
-        if view.composite:
+        if view.composite and item.publish:
             # Components configured for a fixed version remain fixed, but are
             # explicitly pointed to the version created by this run.
             for component in dependencies:
                 if not component.follows_latest:
-                    version = published_versions[component.content_view_id]
+                    version = selected_versions[component.content_view_id]
                     component_name = catalog.by_id[component.content_view_id].name
                     print(
                         f"\n[{view.name}] update fixed component {component_name} "
@@ -526,22 +761,46 @@ def run(args: argparse.Namespace) -> None:
                     )
                     hammer.pin_component(view, component, version)
 
-        versions_before = {version.id for version in hammer.list_versions(view.id)}
-        print(f"\n[{view.name}] publishing a new version...", flush=True)
-        hammer.publish(view, description)
-        versions_after = hammer.list_versions(view.id)
-        new_versions = [version for version in versions_after if version.id not in versions_before]
-        version = latest_version(new_versions)
-        if version is None:
-            raise PublishError(
-                f"Publication of {view.name} finished, but no new version was found"
+        if item.publish:
+            versions_before = {version.id for version in versions_by_view[view.id]}
+            print(f"\n[{view.name}] publishing a new version...", flush=True)
+            hammer.publish(view, description)
+            versions_after = hammer.list_versions(view.id)
+            new_versions = [
+                version for version in versions_after if version.id not in versions_before
+            ]
+            version = latest_version(new_versions)
+            if version is None:
+                raise PublishError(
+                    f"Publication of {view.name} finished, but no new version was found"
+                )
+            print(
+                f"[{view.name}] created version {version.number} (ID {version.id})",
+                flush=True,
             )
-        print(f"[{view.name}] created version {version.number} (ID {version.id})", flush=True)
+        else:
+            version = item.current_version
+            if version is None:
+                raise PublishError(f"No reusable version was found for {view.name}")
+            print(
+                f"\n[{view.name}] reusing version {version.number} (ID {version.id}): "
+                f"{item.reason}",
+                flush=True,
+            )
 
+        promoted_environments = set(version.environments)
         for environment in environments:
+            if environment.name in promoted_environments:
+                print(
+                    f"[{view.name}] version {version.number} is already in "
+                    f"{environment.name}; skipping promotion",
+                    flush=True,
+                )
+                continue
             print(f"[{view.name}] promoting to {environment.name}...", flush=True)
             hammer.promote(version, environment)
-        published_versions[view.id] = version
+            promoted_environments.add(environment.name)
+        selected_versions[view.id] = version
         completed.add(view.id)
 
     print("\nCompleted: all publications and promotions finished successfully.")
